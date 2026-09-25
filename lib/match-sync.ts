@@ -2,74 +2,53 @@ import { listFriends, updateFriendSync, type StoredFriend } from "/lib/friends-s
 import { existingMatchIds, upsertMatches, type MatchInput } from "/lib/matches-store";
 import { getAccount, getMatch, getMatchIds, participantFor, resolvePlatform } from "/lib/riot";
 
-const DAY_SEC = 24 * 60 * 60;
-const WINDOW_DAYS = 5;
-/** Cap Riot detail fetches per friend per sync click (rate-limit friendly). */
-const MAX_FETCH_PER_FRIEND = 40;
-
-export type SyncMode = "refresh" | "backfill";
+/** Safety caps so one sync doesn't blow rate limits forever. */
+const MAX_IDS_PER_FRIEND = 1000;
+const MAX_DETAILS_PER_FRIEND = 400;
 
 export type FriendSyncResult = {
   friendId: number;
   name: string;
   tag: string;
+  mode: "full" | "refresh";
   fetched: number;
   inserted: number;
-  windowStart: number;
-  windowEnd: number;
   error?: string;
 };
 
-function windowFor(friend: StoredFriend, mode: SyncMode): { startSec: number; endSec: number } {
-  const nowSec = Math.floor(Date.now() / 1000);
-
-  if (mode === "refresh") {
-    if (friend.syncedNewest) {
-      // From last known match (minus 1h overlap) up to now.
-      const startSec = Math.floor(friend.syncedNewest / 1000) - 3600;
-      return { startSec: Math.max(0, startSec), endSec: nowSec };
-    }
-    return { startSec: nowSec - WINDOW_DAYS * DAY_SEC, endSec: nowSec };
-  }
-
-  // backfill: 5 more days older than the oldest cursor we already synced.
-  const oldestMs = friend.syncedOldest ?? friend.syncedNewest ?? Date.now();
-  const endSec = Math.floor(oldestMs / 1000);
-  return { startSec: Math.max(0, endSec - WINDOW_DAYS * DAY_SEC), endSec };
-}
-
 async function collectMatchIds(
   puuid: string,
-  startSec: number,
-  endSec: number,
+  opts: { startTime?: number; endTime?: number } = {},
 ): Promise<string[]> {
   const ids: string[] = [];
   let start = 0;
-  while (ids.length < MAX_FETCH_PER_FRIEND) {
+  while (ids.length < MAX_IDS_PER_FRIEND) {
     const batch = await getMatchIds(puuid, {
       start,
       count: 100,
-      startTime: startSec,
-      endTime: endSec,
+      startTime: opts.startTime,
+      endTime: opts.endTime,
     });
     if (!batch.length) break;
     ids.push(...batch);
     if (batch.length < 100) break;
     start += batch.length;
   }
-  return ids.slice(0, MAX_FETCH_PER_FRIEND);
+  return ids.slice(0, MAX_IDS_PER_FRIEND);
 }
 
-async function syncOneFriend(friend: StoredFriend, mode: SyncMode): Promise<FriendSyncResult> {
-  const { startSec, endSec } = windowFor(friend, mode);
-  const base = {
+async function syncOneFriend(friend: StoredFriend): Promise<FriendSyncResult> {
+  const isFirst = friend.syncedNewest == null;
+  const mode: "full" | "refresh" = isFirst ? "full" : "refresh";
+  const nowSec = Math.floor(Date.now() / 1000);
+
+  const base: FriendSyncResult = {
     friendId: friend.id,
     name: friend.gameName,
     tag: friend.tagLine,
+    mode,
     fetched: 0,
     inserted: 0,
-    windowStart: startSec * 1000,
-    windowEnd: endSec * 1000,
   };
 
   try {
@@ -77,11 +56,19 @@ async function syncOneFriend(friend: StoredFriend, mode: SyncMode): Promise<Frie
     const platform =
       friend.platform ||
       (await resolvePlatform(account.puuid, friend.platform).catch(() => null));
-    const ids = await collectMatchIds(account.puuid, startSec, endSec);
+
+    const ids = isFirst
+      ? await collectMatchIds(account.puuid)
+      : await collectMatchIds(account.puuid, {
+          // Slight overlap so we don't miss games around the cursor.
+          startTime: Math.floor(friend.syncedNewest! / 1000) - 3600,
+          endTime: nowSec,
+        });
+
     base.fetched = ids.length;
 
     const known = await existingMatchIds(friend.id, ids);
-    const missing = ids.filter((id) => !known.has(id));
+    const missing = ids.filter((id) => !known.has(id)).slice(0, MAX_DETAILS_PER_FRIEND);
 
     const rows: MatchInput[] = [];
     for (const matchId of missing) {
@@ -107,33 +94,25 @@ async function syncOneFriend(friend: StoredFriend, mode: SyncMode): Promise<Frie
         });
       } catch (error) {
         if (error instanceof Error && error.message === "RIOT_RATE_LIMIT") break;
-        // skip individual match failures
       }
     }
 
     const inserted = await upsertMatches(rows);
     base.inserted = inserted;
 
-    // Advance sync cursors even if Riot returned 0 games (we still covered the window).
     const creations = rows.map((r) => r.gameCreation);
     let syncedNewest = friend.syncedNewest;
     let syncedOldest = friend.syncedOldest;
 
-    if (mode === "refresh") {
-      syncedNewest = Math.max(syncedNewest ?? 0, endSec * 1000, ...creations);
-      if (syncedOldest == null) {
-        syncedOldest = creations.length
-          ? Math.min(...creations)
-          : startSec * 1000;
-      } else if (creations.length) {
-        syncedOldest = Math.min(syncedOldest, ...creations);
-      }
+    if (creations.length) {
+      syncedNewest = Math.max(syncedNewest ?? 0, ...creations, Date.now());
+      syncedOldest = Math.min(syncedOldest ?? creations[0], ...creations);
+    } else if (isFirst) {
+      // Mark as synced even with 0 ranked/normal games so later calls only refresh.
+      syncedNewest = Date.now();
+      syncedOldest = Date.now();
     } else {
-      // backfill: always push oldest cursor to the start of this window
-      syncedOldest = Math.min(syncedOldest ?? endSec * 1000, startSec * 1000, ...creations);
-      if (syncedNewest == null && creations.length) {
-        syncedNewest = Math.max(...creations);
-      }
+      syncedNewest = Math.max(syncedNewest ?? 0, Date.now());
     }
 
     await updateFriendSync(friend.id, {
@@ -152,21 +131,27 @@ async function syncOneFriend(friend: StoredFriend, mode: SyncMode): Promise<Frie
   }
 }
 
-export async function syncMatches(mode: SyncMode = "refresh"): Promise<{
-  mode: SyncMode;
+/**
+ * First time per friend → full match history.
+ * Later → only matches newer than the last sync cursor.
+ */
+export async function syncMatches(): Promise<{
   results: FriendSyncResult[];
   inserted: number;
   fetched: number;
+  full: number;
+  refresh: number;
 }> {
   const friends = await listFriends();
   const results: FriendSyncResult[] = [];
   for (const friend of friends) {
-    results.push(await syncOneFriend(friend, mode));
+    results.push(await syncOneFriend(friend));
   }
   return {
-    mode,
     results,
     inserted: results.reduce((s, r) => s + r.inserted, 0),
     fetched: results.reduce((s, r) => s + r.fetched, 0),
+    full: results.filter((r) => r.mode === "full").length,
+    refresh: results.filter((r) => r.mode === "refresh").length,
   };
 }

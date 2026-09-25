@@ -22,10 +22,10 @@ docker compose up -d
 7. Ejecutá `pnpm install` (o `npm install`) y después `pnpm dev`.
 
 ## Historial de partidas
-Las partidas se guardan en Postgres (`matches`). Botones en la UI:
-- **Actualizar partidas**: trae lo nuevo desde el último sync (o los últimos 5 días si es la primera vez).
-- **Traer +5 días**: pide a Riot la ventana de 5 días anteriores al historial ya guardado.
-- **Mostrar más**: pagina lo que ya está en la base, sin llamar a Riot.
+Las partidas se guardan en Postgres (`matches`):
+- **Primera carga** (amigo nuevo o DB vacía): trae todo el historial disponible en Riot.
+- **Actualizar partidas**: solo trae partidas nuevas desde la última sincronización.
+- **Mostrar más**: pagina lo ya guardado en la base, sin llamar a Riot.
 
 ## Uso
 - **Agregar amigo:** formulario arriba del dashboard (`GameName#TAG`). Valida el Riot ID contra la API antes de guardar.

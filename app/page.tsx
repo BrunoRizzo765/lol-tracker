@@ -15,7 +15,7 @@ type ResultFilter = "Todos" | "Victorias" | "Derrotas";
 export default function Home() {
   const [data, setData] = useState<Dashboard | null>(null);
   const [loading, setLoading] = useState(true);
-  const [syncing, setSyncing] = useState<"refresh" | "backfill" | null>(null);
+  const [syncing, setSyncing] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState("");
   const [syncMsg, setSyncMsg] = useState("");
@@ -46,27 +46,24 @@ export default function Home() {
     }
   }
 
-  async function sync(mode: "refresh" | "backfill") {
-    setSyncing(mode);
+  async function sync() {
+    setSyncing(true);
     setSyncMsg("");
     setError("");
     try {
-      const r = await fetch("/api/matches/sync", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ mode }),
-      });
+      const r = await fetch("/api/matches/sync", { method: "POST" });
       const json = await r.json();
       if (!r.ok) throw new Error(json.error || "Error sincronizando");
-      const days = mode === "backfill" ? "+5 días atrás" : "desde el último refresh";
-      setSyncMsg(
-        `Listo (${days}): ${json.inserted} nuevas de ${json.fetched} encontradas en Riot.`,
-      );
+      const hint =
+        json.full > 0
+          ? `carga completa para ${json.full} amigo${json.full === 1 ? "" : "s"}`
+          : "solo partidas nuevas";
+      setSyncMsg(`Listo (${hint}): ${json.inserted} nuevas de ${json.fetched} encontradas.`);
       await load();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Error sincronizando");
     } finally {
-      setSyncing(null);
+      setSyncing(false);
     }
   }
 
@@ -96,9 +93,9 @@ export default function Home() {
   useEffect(() => {
     (async () => {
       const dash = await load();
-      // Primera visita sin historial: trae los últimos 5 días solo.
+      // Sin historial: primera carga completa de todas las partidas.
       if (dash && (dash.matchTotal ?? 0) === 0) {
-        await sync("refresh");
+        await sync();
       }
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -140,15 +137,15 @@ export default function Home() {
           <div className="flex flex-col items-start gap-2 md:items-end">
             <div className="flex flex-wrap gap-2">
               <button
-                onClick={() => sync("refresh")}
-                disabled={loading || Boolean(syncing)}
+                onClick={() => sync()}
+                disabled={loading || syncing}
                 className="rounded-xl border border-slate-700 bg-slate-900 px-4 py-3 text-sm font-semibold hover:border-cyan-500 disabled:opacity-50"
               >
-                {syncing === "refresh" ? "Sincronizando…" : "↻ Actualizar partidas"}
+                {syncing ? "Sincronizando…" : "↻ Actualizar partidas"}
               </button>
               <button
                 onClick={load}
-                disabled={loading || Boolean(syncing)}
+                disabled={loading || syncing}
                 className="rounded-xl border border-slate-700 bg-slate-900 px-4 py-3 text-sm font-semibold hover:border-cyan-500 disabled:opacity-50"
               >
                 {loading ? "Cargando…" : "Rangos / live"}
@@ -162,7 +159,7 @@ export default function Home() {
           <AddFriendForm
             onAdded={async () => {
               await load();
-              await sync("refresh");
+              await sync();
             }}
           />
         </section>
@@ -266,17 +263,8 @@ export default function Home() {
                 <h2 className="mr-2 text-lg font-bold">Historial de partidas</h2>
                 <p className="text-sm text-slate-500">
                   {matchTotal} guardadas
-                  {oldestSync ? ` · historial hasta ${timeAgo(oldestSync)}` : ""}
+                  {oldestSync ? ` · desde ${timeAgo(oldestSync)}` : ""}
                 </p>
-                <div className="flex flex-wrap gap-2 sm:ml-auto">
-                  <button
-                    onClick={() => sync("backfill")}
-                    disabled={Boolean(syncing) || loading}
-                    className="rounded-xl border border-cyan-800 bg-cyan-950/40 px-4 py-2 text-sm font-semibold text-cyan-300 hover:border-cyan-500 disabled:opacity-50"
-                  >
-                    {syncing === "backfill" ? "Trayendo…" : "Traer +5 días"}
-                  </button>
-                </div>
               </div>
 
               <div className="mb-4 flex flex-wrap items-center gap-2">
@@ -314,7 +302,7 @@ export default function Home() {
                   ))
                 ) : (
                   <p className="rounded-2xl border border-slate-800 bg-slate-900/40 p-8 text-center text-slate-500">
-                    No hay partidas guardadas. Tocá <b>Actualizar partidas</b> o <b>Traer +5 días</b>.
+                    No hay partidas guardadas. Tocá <b>Actualizar partidas</b> para la carga inicial.
                   </p>
                 )}
               </div>
