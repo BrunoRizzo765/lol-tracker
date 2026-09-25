@@ -23,7 +23,18 @@ export type Rank = {
   wins: number;
   losses: number;
   winRate: number;
-  hotStreak: boolean;
+};
+
+export type LiveGame = {
+  friend: string;
+  tag: string;
+  gameId: number;
+  queueId: number;
+  mode: string;
+  startTime: number;
+  length: number;
+  championName: string;
+  teamId: number;
 };
 
 export type Friend = {
@@ -31,8 +42,16 @@ export type Friend = {
   dbId?: number;
   name: string;
   tag: string;
+  solo: Rank | null;
+  flex: Rank | null;
+  /** Prefer Solo, else Flex — used for ladder sorting. */
   rank: Rank | null;
   matches: Match[];
+  live: LiveGame | null;
+  syncedOldest?: number | null;
+  syncedNewest?: number | null;
+  lastSyncAt?: string | null;
+  rankError?: string | null;
   error?: string;
 };
 
@@ -72,13 +91,22 @@ export type MatchDetail = {
   ddragonVersion?: string | null;
 };
 
-export type LadderEntry = { name: string; tag: string; rank: Rank | null; score: number };
-
-export type RankingEntry = { name: string; tag: string; games: number; wins: number; losses: number; winRate: number; kda: number };
+export type LadderEntry = {
+  name: string;
+  tag: string;
+  solo: Rank | null;
+  flex: Rank | null;
+  rank: Rank | null;
+  live: boolean;
+  lastMatchAt: number | null;
+  score: number;
+};
 
 export type Dashboard = {
   friends: Friend[];
   recent: Match[];
-  ranking: RankingEntry[];
+  matchTotal: number;
+  hasMoreMatches: boolean;
+  live: LiveGame[];
   ladder: LadderEntry[];
 };

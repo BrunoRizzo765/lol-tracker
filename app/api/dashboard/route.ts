@@ -1,10 +1,14 @@
 import { NextResponse } from "next/server";
 import { listFriends } from "/lib/friends-store";
-import { getFriendMatches, participantFor, pickSoloQueue, rankScore } from "/lib/riot";
+import { listMatches, listMatchesForFriend } from "/lib/matches-store";
+import { getAccount, getLiveGameByPuuid, getRankedEntries, rankScore, splitRanks } from "/lib/riot";
 
 export const runtime = "nodejs";
 
-export async function GET() {
+export async function GET(request: Request) {
+  const { searchParams } = new URL(request.url);
+  const matchLimit = Math.min(Number(searchParams.get("matchLimit") || 40) || 40, 100);
+
   let friends;
   try {
     friends = await listFriends();
@@ -26,47 +30,38 @@ export async function GET() {
   const result = [];
   for (const friend of friends) {
     try {
-      const { account, matches, ranked } = await getFriendMatches(friend.gameName, friend.tagLine, 8);
-      const solo = pickSoloQueue(ranked);
+      const account = friend.puuid
+        ? { puuid: friend.puuid, gameName: friend.gameName, tagLine: friend.tagLine }
+        : await getAccount(friend.gameName, friend.tagLine);
+
+      const [rankedResult, live, storedMatches] = await Promise.all([
+        getRankedEntries(account.puuid)
+          .then((ranked) => ({ ranked, rankError: null as string | null }))
+          .catch((error) => ({
+            ranked: [],
+            rankError: error instanceof Error ? error.message : "RANK_ERROR",
+          })),
+        getLiveGameByPuuid(account.puuid, account.gameName, account.tagLine).catch(() => null),
+        listMatchesForFriend(friend.id, 12),
+      ]);
+
+      const { solo, flex } = splitRanks(rankedResult.ranked);
+      const rank = solo ?? flex;
+
       result.push({
         id: account.puuid,
         dbId: friend.id,
         name: account.gameName,
         tag: account.tagLine,
-        rank: solo
-          ? {
-              queue: solo.queueType,
-              tier: solo.tier,
-              division: solo.rank,
-              lp: solo.leaguePoints,
-              wins: solo.wins,
-              losses: solo.losses,
-              winRate: solo.wins + solo.losses ? Math.round((solo.wins / (solo.wins + solo.losses)) * 100) : 0,
-              hotStreak: solo.hotStreak,
-            }
-          : null,
-        matches: matches
-          .map((match) => {
-            const p = participantFor(match, account.puuid);
-            return p
-              ? {
-                  id: match.metadata.matchId,
-                  date: match.info.gameCreation,
-                  duration: match.info.gameDuration,
-                  queueId: match.info.queueId,
-                  mode: match.info.gameMode,
-                  champion: p.championName,
-                  kills: p.kills,
-                  deaths: p.deaths,
-                  assists: p.assists,
-                  win: p.win,
-                  cs: p.totalMinionsKilled + p.neutralMinionsKilled,
-                  level: p.champLevel,
-                  gold: p.goldEarned,
-                }
-              : null;
-          })
-          .filter(Boolean),
+        solo,
+        flex,
+        rank,
+        rankError: rankedResult.rankError,
+        live,
+        syncedOldest: friend.syncedOldest,
+        syncedNewest: friend.syncedNewest,
+        lastSyncAt: friend.lastSyncAt,
+        matches: storedMatches.map(({ friendId: _f, friend: _n, ...m }) => m),
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : "UNKNOWN_ERROR";
@@ -75,7 +70,10 @@ export async function GET() {
         dbId: friend.id,
         name: friend.gameName,
         tag: friend.tagLine,
+        solo: null,
+        flex: null,
         rank: null,
+        live: null,
         matches: [],
         error: message,
       });
@@ -83,39 +81,38 @@ export async function GET() {
   }
 
   const ladder = result
-    .map((friend) => ({
-      name: friend.name,
-      tag: friend.tag,
-      rank: friend.rank,
-      score: rankScore(
-        friend.rank ? { tier: friend.rank.tier, rank: friend.rank.division, leaguePoints: friend.rank.lp } : null,
-      ),
-    }))
-    .sort((a, b) => b.score - a.score);
-
-  const allMatches = result.flatMap((friend) => friend.matches.map((match) => ({ ...match, friend: friend.name })));
-  const valid = allMatches.filter(Boolean) as Array<
-    NonNullable<(typeof result)[number]["matches"][number]> & { friend: string }
-  >;
-  const stats = result
     .map((friend) => {
-      const ms = friend.matches.filter(Boolean) as NonNullable<(typeof friend.matches)[number]>[];
-      const wins = ms.filter((m) => m.win).length;
-      const kills = ms.reduce((sum, m) => sum + m.kills, 0);
-      const deaths = ms.reduce((sum, m) => sum + m.deaths, 0);
-      const assists = ms.reduce((sum, m) => sum + m.assists, 0);
+      const ms = friend.matches;
+      const lastMatchAt = ms.length ? Math.max(...ms.map((m) => m.date)) : null;
       return {
         name: friend.name,
         tag: friend.tag,
-        games: ms.length,
-        wins,
-        losses: ms.length - wins,
-        winRate: ms.length ? Math.round((wins / ms.length) * 100) : 0,
-        kda: deaths ? Number(((kills + assists) / deaths).toFixed(2)) : kills + assists,
+        solo: friend.solo,
+        flex: friend.flex,
+        rank: friend.rank,
+        live: Boolean(friend.live),
+        lastMatchAt,
+        score: rankScore(
+          friend.rank
+            ? { tier: friend.rank.tier, rank: friend.rank.division, leaguePoints: friend.rank.lp }
+            : null,
+        ),
       };
     })
-    .sort((a, b) => b.winRate - a.winRate || b.kda - a.kda);
+    .sort((a, b) => {
+      if (a.live !== b.live) return a.live ? -1 : 1;
+      return b.score - a.score;
+    });
 
-  valid.sort((a, b) => b.date - a.date);
-  return NextResponse.json({ friends: result, recent: valid.slice(0, 30), ranking: stats, ladder });
+  const { matches: recent, total: matchTotal } = await listMatches({ limit: matchLimit });
+  const live = result.map((f) => f.live).filter(Boolean);
+
+  return NextResponse.json({
+    friends: result,
+    recent,
+    matchTotal,
+    hasMoreMatches: recent.length < matchTotal,
+    live,
+    ladder,
+  });
 }

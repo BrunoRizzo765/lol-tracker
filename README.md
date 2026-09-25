@@ -18,10 +18,14 @@ docker compose up -d
 
 4. En `.env.local` dejá `DATABASE_URL=postgresql://lol:lol@localhost:5432/lol_tracker` (o la URL de Neon/Supabase).
 5. Opcional: `FRIENDS=Name#TAG,...` seedea la tabla la primera vez que esté vacía.
-6. Para LAS usá `RIOT_REGION=la1` y `RIOT_REGIONAL=americas`.
+6. Para amigos de LAS: `RIOT_REGION=la1` y `RIOT_REGIONAL=americas`. Si mezclás LAN/BR/NA, el tracker prueba esas plataformas automáticamente.
 7. Ejecutá `pnpm install` (o `npm install`) y después `pnpm dev`.
 
-La tabla `friends` se crea sola al primer request.
+## Historial de partidas
+Las partidas se guardan en Postgres (`matches`). Botones en la UI:
+- **Actualizar partidas**: trae lo nuevo desde el último sync (o los últimos 5 días si es la primera vez).
+- **Traer +5 días**: pide a Riot la ventana de 5 días anteriores al historial ya guardado.
+- **Mostrar más**: pagina lo que ya está en la base, sin llamar a Riot.
 
 ## Uso
 - **Agregar amigo:** formulario arriba del dashboard (`GameName#TAG`). Valida el Riot ID contra la API antes de guardar.

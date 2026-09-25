@@ -25,6 +25,12 @@ export const rankLabel = (r: Rank | null) =>
       ? `${cap(r.tier)} ${r.lp} LP`
       : `${cap(r.tier)} ${r.division} · ${r.lp} LP`;
 
+export const formatDuration = (seconds: number) => {
+  const m = Math.floor(seconds / 60);
+  const s = seconds % 60;
+  return `${m}:${String(s).padStart(2, "0")}`;
+};
+
 export const queueLabel = (q: string) => (q === "RANKED_SOLO_5x5" ? "Solo/Dúo" : q === "RANKED_FLEX_SR" ? "Flex" : q);
 
 export const timeAgo = (timestamp: number) => {

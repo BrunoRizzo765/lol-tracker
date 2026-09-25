@@ -1,15 +1,44 @@
 import { ensureSchema, pool } from "/lib/db";
 import { parseFriends } from "/lib/riot";
 
-export type StoredFriend = { id: number; gameName: string; tagLine: string };
+export type StoredFriend = {
+  id: number;
+  gameName: string;
+  tagLine: string;
+  puuid: string | null;
+  syncedNewest: number | null;
+  syncedOldest: number | null;
+  lastSyncAt: string | null;
+};
 
-type Row = { id: number; game_name: string; tag_line: string };
-const toFriend = (r: Row): StoredFriend => ({ id: r.id, gameName: r.game_name, tagLine: r.tag_line });
+type Row = {
+  id: number;
+  game_name: string;
+  tag_line: string;
+  puuid: string | null;
+  synced_newest: string | number | null;
+  synced_oldest: string | number | null;
+  last_sync_at: Date | string | null;
+};
+
+const toNum = (v: string | number | null | undefined) =>
+  v == null ? null : typeof v === "number" ? v : Number(v);
+
+const toFriend = (r: Row): StoredFriend => ({
+  id: r.id,
+  gameName: r.game_name,
+  tagLine: r.tag_line,
+  puuid: r.puuid,
+  syncedNewest: toNum(r.synced_newest),
+  syncedOldest: toNum(r.synced_oldest),
+  lastSyncAt: r.last_sync_at ? new Date(r.last_sync_at).toISOString() : null,
+});
 
 async function selectAll() {
   await ensureSchema();
   const { rows } = await pool.query<Row>(
-    "SELECT id, game_name, tag_line FROM friends ORDER BY created_at ASC, id ASC",
+    `SELECT id, game_name, tag_line, puuid, synced_newest, synced_oldest, last_sync_at
+     FROM friends ORDER BY created_at ASC, id ASC`,
   );
   return rows;
 }
@@ -38,7 +67,7 @@ export async function addFriend(gameName: string, tagLine: string): Promise<Stor
   const { rows } = await pool.query<Row>(
     `INSERT INTO friends (game_name, tag_line) VALUES ($1, $2)
      ON CONFLICT (game_name, tag_line) DO UPDATE SET game_name = EXCLUDED.game_name
-     RETURNING id, game_name, tag_line`,
+     RETURNING id, game_name, tag_line, puuid, synced_newest, synced_oldest, last_sync_at`,
     [gameName, tagLine],
   );
   return toFriend(rows[0]);
@@ -47,6 +76,26 @@ export async function addFriend(gameName: string, tagLine: string): Promise<Stor
 export async function removeFriend(id: number): Promise<void> {
   await ensureSchema();
   await pool.query("DELETE FROM friends WHERE id = $1", [id]);
+}
+
+export async function updateFriendSync(
+  id: number,
+  data: {
+    puuid?: string;
+    syncedNewest?: number | null;
+    syncedOldest?: number | null;
+  },
+) {
+  await ensureSchema();
+  await pool.query(
+    `UPDATE friends SET
+       puuid = COALESCE($2, puuid),
+       synced_newest = CASE WHEN $3::bigint IS NULL THEN synced_newest ELSE $3::bigint END,
+       synced_oldest = CASE WHEN $4::bigint IS NULL THEN synced_oldest ELSE $4::bigint END,
+       last_sync_at = NOW()
+     WHERE id = $1`,
+    [id, data.puuid ?? null, data.syncedNewest ?? null, data.syncedOldest ?? null],
+  );
 }
 
 export function parseRiotId(raw: string): { gameName: string; tagLine: string } | null {

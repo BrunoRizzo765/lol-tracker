@@ -57,7 +57,9 @@ async function riotFetch<T>(base: string, path: string, revalidate = 120): Promi
   if (!API_KEY || API_KEY === "RGAPI-REPLACE_ME") throw new Error("Missing RIOT_API_KEY");
   const response = await fetch(`${base}${path}`, {
     headers: { "X-Riot-Token": API_KEY },
-    next: { revalidate },
+    ...(revalidate <= 0
+      ? { cache: "no-store" as const }
+      : { next: { revalidate } }),
   });
   if (response.status === 404) throw new Error("RIOT_NOT_FOUND");
   if (response.status === 429) throw new Error("RIOT_RATE_LIMIT");
@@ -73,11 +75,24 @@ export async function getAccount(gameName: string, tagLine: string) {
   );
 }
 
-export async function getMatchIds(puuid: string, count = 10) {
+export async function getMatchIds(
+  puuid: string,
+  opts: { count?: number; start?: number; startTime?: number; endTime?: number } = {},
+) {
+  const count = Math.min(Math.max(opts.count ?? 10, 1), 100);
+  const start = Math.max(opts.start ?? 0, 0);
+  const params = new URLSearchParams({
+    start: String(start),
+    count: String(count),
+  });
+  // Riot expects epoch seconds for startTime / endTime.
+  if (opts.startTime != null) params.set("startTime", String(Math.floor(opts.startTime)));
+  if (opts.endTime != null) params.set("endTime", String(Math.floor(opts.endTime)));
+
   return riotFetch<MatchList>(
     `https://${REGIONAL}.api.riotgames.com`,
-    `/lol/match/v5/matches/by-puuid/${encodeURIComponent(puuid)}/ids?start=0&count=${count}`,
-    120,
+    `/lol/match/v5/matches/by-puuid/${encodeURIComponent(puuid)}/ids?${params}`,
+    0,
   );
 }
 
@@ -89,22 +104,123 @@ export async function getMatch(matchId: string) {
   );
 }
 
-export async function getRankedEntries(puuid: string) {
-  return riotFetch<LeagueEntry[]>(
+type Summoner = { id: string; puuid: string; profileIconId: number; summonerLevel: number };
+
+/** Platforms that share the americas / europe / asia match routing. */
+const PLATFORM_FALLBACKS: Record<string, string[]> = {
+  americas: ["la1", "la2", "br1", "na1"],
+  europe: ["euw1", "eun1", "tr1", "ru"],
+  asia: ["kr", "jp1"],
+  sea: ["oc1", "sg2", "tw2", "vn2"],
+};
+
+function platformsToTry(): string[] {
+  const primary = PLATFORM;
+  const group =
+    PLATFORM_FALLBACKS[REGIONAL] ||
+    Object.values(PLATFORM_FALLBACKS).find((list) => list.includes(primary)) ||
+    [];
+  return [primary, ...group.filter((p) => p !== primary)];
+}
+
+async function fetchRankedOnPlatform(platform: string, puuid: string): Promise<LeagueEntry[]> {
+  const base = `https://${platform}.api.riotgames.com`;
+  try {
+    return await riotFetch<LeagueEntry[]>(
+      base,
+      `/lol/league/v4/entries/by-puuid/${encodeURIComponent(puuid)}`,
+      300,
+    );
+  } catch (error) {
+    if (!(error instanceof Error) || error.message !== "RIOT_NOT_FOUND") throw error;
+  }
+
+  // by-puuid missing or 404 → resolve summoner id on this platform, then by-summoner.
+  try {
+    const summoner = await riotFetch<Summoner>(
+      base,
+      `/lol/summoner/v4/summoners/by-puuid/${encodeURIComponent(puuid)}`,
+      3600,
+    );
+    try {
+      return await riotFetch<LeagueEntry[]>(
+        base,
+        `/lol/league/v4/entries/by-summoner/${encodeURIComponent(summoner.id)}`,
+        300,
+      );
+    } catch (inner) {
+      if (inner instanceof Error && inner.message === "RIOT_NOT_FOUND") return [];
+      throw inner;
+    }
+  } catch (error) {
+    if (error instanceof Error && error.message === "RIOT_NOT_FOUND") {
+      throw new Error("PLATFORM_MISS");
+    }
+    throw error;
+  }
+}
+
+export async function getSummonerByPuuid(puuid: string) {
+  return riotFetch<Summoner>(
     `https://${PLATFORM}.api.riotgames.com`,
-    `/lol/league/v4/entries/by-puuid/${encodeURIComponent(puuid)}`,
-    600,
+    `/lol/summoner/v4/summoners/by-puuid/${encodeURIComponent(puuid)}`,
+    3600,
   );
+}
+
+/** Ranked entries across the regional platform group (fixes LAS/LAN/BR mismatches). */
+export async function getRankedEntries(puuid: string) {
+  let lastError: Error | null = null;
+  for (const platform of platformsToTry()) {
+    try {
+      return await fetchRankedOnPlatform(platform, puuid);
+    } catch (error) {
+      if (error instanceof Error && error.message === "PLATFORM_MISS") {
+        lastError = error;
+        continue;
+      }
+      throw error;
+    }
+  }
+  if (lastError) return [];
+  return [];
+}
+
+export function toRank(entry: LeagueEntry | null | undefined) {
+  if (!entry?.tier) return null;
+  const wins = entry.wins ?? 0;
+  const losses = entry.losses ?? 0;
+  return {
+    queue: entry.queueType,
+    tier: entry.tier,
+    division: entry.rank,
+    lp: entry.leaguePoints,
+    wins,
+    losses,
+    winRate: wins + losses ? Math.round((wins / (wins + losses)) * 100) : 0,
+  };
+}
+
+export function splitRanks(entries: LeagueEntry[] | undefined) {
+  const list = entries ?? [];
+  const solo = list.find((e) => e.queueType === "RANKED_SOLO_5x5") ?? null;
+  const flex = list.find((e) => e.queueType === "RANKED_FLEX_SR") ?? null;
+  return { solo: toRank(solo), flex: toRank(flex) };
 }
 
 export async function getFriendMatches(gameName: string, tagLine: string, count = 8) {
   const account = await getAccount(gameName, tagLine);
-  const [ids, ranked] = await Promise.all([
-    getMatchIds(account.puuid, count),
-    getRankedEntries(account.puuid).catch(() => [] as LeagueEntry[]),
+  const [ids, rankedResult] = await Promise.all([
+    getMatchIds(account.puuid, { count }),
+    getRankedEntries(account.puuid)
+      .then((ranked) => ({ ranked, rankError: null as string | null }))
+      .catch((error) => ({
+        ranked: [] as LeagueEntry[],
+        rankError: error instanceof Error ? error.message : "RANK_ERROR",
+      })),
   ]);
   const matches = await Promise.all(ids.map((id) => getMatch(id)));
-  return { account, matches, ranked };
+  return { account, matches, ranked: rankedResult.ranked, rankError: rankedResult.rankError };
 }
 
 const TIER_ORDER: Record<string, number> = {
@@ -125,7 +241,7 @@ export function pickSoloQueue(entries: LeagueEntry[] | undefined) {
   return (
     entries.find((e) => e.queueType === "RANKED_SOLO_5x5") ??
     entries.find((e) => e.queueType === "RANKED_FLEX_SR") ??
-    entries[0]
+    null
   );
 }
 
@@ -190,45 +306,48 @@ type CurrentGame = {
   bannedChampions: { championId: number; teamId: number; pickTurn: number }[];
 };
 
-export async function getLiveGame(gameName: string, tagLine: string) {
-  const account = await getAccount(gameName, tagLine);
-  let game: CurrentGame;
-  try {
-    game = await riotFetch<CurrentGame>(
-      `https://${PLATFORM}.api.riotgames.com`,
-      `/lol/spectator/v5/active-games/by-summoner/${encodeURIComponent(account.puuid)}`,
-      20,
-    );
-  } catch (error) {
-    if (error instanceof Error && error.message === "RIOT_NOT_FOUND") return null; // not currently in a game
-    throw error;
-  }
-
+export async function getLiveGameByPuuid(puuid: string, friendName: string, friendTag: string) {
   const champions = await getChampionsById().catch(() => new Map<number, { id: string; name: string }>());
   const champName = (id: number) => champions.get(id)?.id ?? String(id);
-  const me = game.participants.find((p) => p.puuid === account.puuid);
 
-  return {
-    friend: account.gameName,
-    tag: account.tagLine,
-    gameId: game.gameId,
-    queueId: game.gameQueueConfigId,
-    mode: game.gameMode,
-    startTime: game.gameStartTime,
-    length: game.gameLength,
-    championName: me ? champName(me.championId) : "",
-    teamId: me?.teamId ?? 100,
-    participants: game.participants.map((p) => ({
-      puuid: p.puuid,
-      name: p.riotId || p.summonerName || "Invocador",
-      championName: champName(p.championId),
-      teamId: p.teamId,
-      isFriend: p.puuid === account.puuid,
-    })),
-    bannedChampions: game.bannedChampions
-      .filter((b) => b.championId > 0)
-      .map((b) => ({ championName: champName(b.championId), teamId: b.teamId })),
-  };
+  for (const platform of platformsToTry()) {
+    let game: CurrentGame;
+    try {
+      game = await riotFetch<CurrentGame>(
+        `https://${platform}.api.riotgames.com`,
+        `/lol/spectator/v5/active-games/by-summoner/${encodeURIComponent(puuid)}`,
+        20,
+      );
+    } catch (error) {
+      if (error instanceof Error && error.message === "RIOT_NOT_FOUND") continue;
+      throw error;
+    }
+
+    const me = game.participants.find((p) => p.puuid === puuid);
+    const elapsed =
+      game.gameStartTime > 0
+        ? Math.max(0, Math.floor((Date.now() - game.gameStartTime) / 1000))
+        : game.gameLength;
+
+    return {
+      friend: friendName,
+      tag: friendTag,
+      gameId: game.gameId,
+      queueId: game.gameQueueConfigId,
+      mode: game.gameMode,
+      startTime: game.gameStartTime,
+      length: elapsed,
+      championName: me ? champName(me.championId) : "",
+      teamId: me?.teamId ?? 100,
+    };
+  }
+
+  return null;
+}
+
+export async function getLiveGame(gameName: string, tagLine: string) {
+  const account = await getAccount(gameName, tagLine);
+  return getLiveGameByPuuid(account.puuid, account.gameName, account.tagLine);
 }
 
 // --- Match detail (full scoreboard) ---

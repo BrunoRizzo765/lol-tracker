@@ -1,11 +1,10 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import type { Dashboard } from "/lib/types";
-import { rankLabel, TIER_COLORS, queueLabel, timeAgo } from "/lib/format";
+import type { Dashboard, Match } from "/lib/types";
+import { formatDuration, queueName, rankLabel, TIER_COLORS, timeAgo } from "/lib/format";
 import { MatchCard } from "/components/match-card";
 import { PlayerCard } from "/components/player-card";
-import { ChampionPool } from "/components/champion-pool";
 import { AddFriendForm } from "/components/add-friend-form";
 import { MatchDetailModal } from "/components/match-detail-modal";
 
@@ -14,45 +13,116 @@ type ResultFilter = "Todos" | "Victorias" | "Derrotas";
 export default function Home() {
   const [data, setData] = useState<Dashboard | null>(null);
   const [loading, setLoading] = useState(true);
+  const [syncing, setSyncing] = useState<"refresh" | "backfill" | null>(null);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState("");
+  const [syncMsg, setSyncMsg] = useState("");
   const [filter, setFilter] = useState("Todos");
   const [result, setResult] = useState<ResultFilter>("Todos");
   const [updatedAt, setUpdatedAt] = useState<number | null>(null);
   const [selectedMatch, setSelectedMatch] = useState<string | null>(null);
+  const [extraMatches, setExtraMatches] = useState<Match[]>([]);
+  const [hasMoreDb, setHasMoreDb] = useState(false);
 
   async function load() {
     setLoading(true);
     setError("");
     try {
-      const r = await fetch("/api/dashboard", { cache: "no-store" });
+      const r = await fetch("/api/dashboard?matchLimit=40", { cache: "no-store" });
       const json = await r.json();
       if (!r.ok) throw new Error(json.error || "Error");
       setData(json);
+      setExtraMatches([]);
+      setHasMoreDb(Boolean(json.hasMoreMatches));
       setUpdatedAt(Date.now());
+      return json as Dashboard;
     } catch (e) {
       setError(e instanceof Error ? e.message : "Error cargando datos");
+      return null;
     } finally {
       setLoading(false);
     }
   }
+
+  async function sync(mode: "refresh" | "backfill") {
+    setSyncing(mode);
+    setSyncMsg("");
+    setError("");
+    try {
+      const r = await fetch("/api/matches/sync", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ mode }),
+      });
+      const json = await r.json();
+      if (!r.ok) throw new Error(json.error || "Error sincronizando");
+      const days = mode === "backfill" ? "+5 días atrás" : "desde el último refresh";
+      setSyncMsg(
+        `Listo (${days}): ${json.inserted} nuevas de ${json.fetched} encontradas en Riot.`,
+      );
+      await load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Error sincronizando");
+    } finally {
+      setSyncing(null);
+    }
+  }
+
+  async function loadMoreFromDb() {
+    if (!data) return;
+    setLoadingMore(true);
+    try {
+      const all = [...(data.recent || []), ...extraMatches];
+      const before = all.length ? Math.min(...all.map((m) => m.date)) : undefined;
+      const qs = new URLSearchParams({ limit: "40" });
+      if (before) qs.set("before", String(before));
+      const r = await fetch(`/api/matches?${qs}`, { cache: "no-store" });
+      const json = await r.json();
+      if (!r.ok) throw new Error(json.error || "Error");
+      const incoming = (json.matches as Match[]).filter(
+        (m) => !all.some((x) => x.id === m.id && x.friend === m.friend),
+      );
+      setExtraMatches((prev) => [...prev, ...incoming]);
+      setHasMoreDb(Boolean(json.hasMore) && incoming.length > 0);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Error cargando más");
+    } finally {
+      setLoadingMore(false);
+    }
+  }
+
   useEffect(() => {
-    load();
+    (async () => {
+      const dash = await load();
+      // Primera visita sin historial: trae los últimos 5 días solo.
+      if (dash && (dash.matchTotal ?? 0) === 0) {
+        await sync("refresh");
+      }
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  const allMatches = useMemo(
+    () => [...(data?.recent || []), ...extraMatches],
+    [data, extraMatches],
+  );
 
   const matches = useMemo(
     () =>
-      (data?.recent || []).filter(
+      allMatches.filter(
         (m) =>
           (filter === "Todos" || m.friend === filter) &&
           (result === "Todos" || (result === "Victorias" ? m.win : !m.win)),
       ),
-    [data, filter, result],
+    [allMatches, filter, result],
   );
 
-  const total = data?.ranking.reduce((s, x) => s + x.games, 0) || 0;
-  const wins = data?.ranking.reduce((s, x) => s + x.wins, 0) || 0;
-  const onFire = data?.ladder.filter((x) => x.rank?.hotStreak).length || 0;
-  const bestKda = data?.ranking.slice().sort((a, b) => b.kda - a.kda)[0];
+  const liveCount = data?.live?.length ?? 0;
+  const matchTotal = data?.matchTotal ?? allMatches.length;
+  const oldestSync = data?.friends
+    .map((f) => f.syncedOldest)
+    .filter((x): x is number => typeof x === "number")
+    .sort((a, b) => a - b)[0];
 
   return (
     <main className="min-h-screen px-5 py-8 md:px-10 lg:px-16">
@@ -63,86 +133,138 @@ export default function Home() {
             <h1 className="text-4xl font-black tracking-tight md:text-6xl">
               Friends <span className="text-cyan-400">Tracker</span>
             </h1>
-            <p className="mt-3 text-slate-400">Rankings, perfiles, campeones y últimas partidas de tu grupo.</p>
+            <p className="mt-3 text-slate-400">Quién está en partida, el rango de cada uno y el historial guardado.</p>
           </div>
           <div className="flex flex-col items-start gap-2 md:items-end">
-            <button
-              onClick={load}
-              disabled={loading}
-              className="rounded-xl border border-slate-700 bg-slate-900 px-4 py-3 text-sm font-semibold hover:border-cyan-500 disabled:opacity-50"
-            >
-              {loading ? "Actualizando…" : "↻ Actualizar"}
-            </button>
-            {updatedAt && <span className="text-xs text-slate-600">Actualizado {timeAgo(updatedAt)}</span>}
+            <div className="flex flex-wrap gap-2">
+              <button
+                onClick={() => sync("refresh")}
+                disabled={loading || Boolean(syncing)}
+                className="rounded-xl border border-slate-700 bg-slate-900 px-4 py-3 text-sm font-semibold hover:border-cyan-500 disabled:opacity-50"
+              >
+                {syncing === "refresh" ? "Sincronizando…" : "↻ Actualizar partidas"}
+              </button>
+              <button
+                onClick={load}
+                disabled={loading || Boolean(syncing)}
+                className="rounded-xl border border-slate-700 bg-slate-900 px-4 py-3 text-sm font-semibold hover:border-cyan-500 disabled:opacity-50"
+              >
+                {loading ? "Cargando…" : "Rangos / live"}
+              </button>
+            </div>
+            {updatedAt && <span className="text-xs text-slate-600">UI {timeAgo(updatedAt)}</span>}
           </div>
         </header>
 
         <section className="mb-8">
-          <AddFriendForm onAdded={load} />
+          <AddFriendForm
+            onAdded={async () => {
+              await load();
+              await sync("refresh");
+            }}
+          />
         </section>
 
         {error && (
           <div className="mb-6 rounded-xl border border-red-900 bg-red-950/40 p-4 text-red-300">
-            {error}. Revisá <code>RIOT_API_KEY</code> y <code>DATABASE_URL</code>.
+            {error}. Revisá <code>RIOT_API_KEY</code>, <code>RIOT_REGION</code> y <code>DATABASE_URL</code>.
           </div>
+        )}
+        {syncMsg && (
+          <div className="mb-6 rounded-xl border border-cyan-900/50 bg-cyan-950/30 p-4 text-cyan-200">{syncMsg}</div>
         )}
         {loading && !data && (
           <div className="rounded-2xl border border-slate-800 bg-slate-900/60 p-10 text-center text-slate-400">
-            Cargando partidas…
+            Cargando amigos…
           </div>
         )}
 
         {data && (
           <>
-            <section className="mb-8 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-              <Stat title="Amigos" value={data.friends.length} />
-              <Stat title="Win rate grupo" value={`${total ? Math.round((wins / total) * 100) : 0}%`} hint={`${total} partidas`} />
-              <Stat title="En racha 🔥" value={onFire} hint="hot streak activo" />
-              <Stat title="Mejor KDA" value={bestKda ? bestKda.kda.toFixed(2) : "—"} hint={bestKda?.name} />
+            <section className="mb-8 overflow-hidden rounded-2xl border border-slate-800 bg-slate-900/60">
+              <div className="border-b border-slate-800 px-5 py-4">
+                <h2 className="text-lg font-bold">Jugando ahora</h2>
+                <p className="text-sm text-slate-500">
+                  {liveCount
+                    ? `${liveCount} amigo${liveCount === 1 ? "" : "s"} en partida`
+                    : "Nadie del grupo está en una partida ahora"}
+                </p>
+              </div>
+              {liveCount ? (
+                <div className="divide-y divide-slate-800">
+                  {data.live.map((g) => (
+                    <div
+                      key={`${g.friend}-${g.gameId}`}
+                      className="flex flex-wrap items-center justify-between gap-3 px-5 py-4"
+                    >
+                      <div>
+                        <p className="font-bold text-emerald-300">
+                          {g.friend}
+                          <span className="text-slate-500">#{g.tag}</span>
+                        </p>
+                        <p className="text-sm text-slate-400">
+                          {g.championName || "Campeón"} · {queueName(g.queueId)}
+                        </p>
+                      </div>
+                      <p className="text-sm font-semibold text-slate-300">{formatDuration(g.length)}</p>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p className="px-5 py-8 text-center text-sm text-slate-600">
+                  Cuando alguien entre a una partida, aparece acá.
+                </p>
+              )}
             </section>
 
             <section className="mb-8 overflow-hidden rounded-2xl border border-slate-800 bg-slate-900/60">
               <div className="border-b border-slate-800 px-5 py-4">
-                <h2 className="text-lg font-bold">Ranking clasificatorio</h2>
-                <p className="text-sm text-slate-500">Elo actual de cada amigo (Solo/Dúo, o Flex si no juega Solo).</p>
+                <h2 className="text-lg font-bold">Rangos</h2>
+                <p className="text-sm text-slate-500">Solo/Dúo y Flex de cada amigo. Los que están en partida van primero.</p>
               </div>
               <div className="divide-y divide-slate-800">
                 {data.ladder.map((x, i) => (
                   <div
                     key={`${x.name}#${x.tag}`}
-                    className="grid grid-cols-[40px_1fr_auto] items-center gap-4 px-5 py-4"
+                    className="grid grid-cols-1 gap-3 px-5 py-4 sm:grid-cols-[32px_1fr_1fr_auto] sm:items-center sm:gap-4"
                   >
-                    <span className={`text-xl font-black ${i === 0 ? "text-amber-300" : "text-slate-500"}`}>
-                      #{i + 1}
+                    <span
+                      className={`text-lg font-black ${x.live ? "text-emerald-400" : i === 0 ? "text-amber-300" : "text-slate-500"}`}
+                    >
+                      {x.live ? "●" : `#${i + 1}`}
                     </span>
                     <div className="min-w-0">
-                      <p className="flex items-center gap-2 font-bold">
+                      <p className="font-bold">
                         {x.name}
-                        {x.rank?.hotStreak && (
-                          <span title="Racha de victorias" className="text-orange-400">
-                            🔥
-                          </span>
-                        )}
+                        <span className="text-slate-500">#{x.tag}</span>
                       </p>
-                      <p
-                        className={`text-sm font-semibold ${
-                          x.rank ? TIER_COLORS[x.rank.tier?.toUpperCase()] || "text-slate-300" : "text-slate-500"
-                        }`}
-                      >
-                        {rankLabel(x.rank)}
+                      <p className="text-xs text-slate-500">
+                        {x.live
+                          ? "En partida"
+                          : x.lastMatchAt
+                            ? `Última partida ${timeAgo(x.lastMatchAt)}`
+                            : "Sin partidas recientes"}
                       </p>
                     </div>
-                    <div className="text-right">
-                      {x.rank ? (
-                        <>
-                          <p className="font-bold text-cyan-400">{x.rank.winRate}%</p>
-                          <p className="text-xs text-slate-500">
-                            {x.rank.wins}V {x.rank.losses}D · {queueLabel(x.rank.queue)}
-                          </p>
-                        </>
-                      ) : (
-                        <p className="text-xs text-slate-600">—</p>
-                      )}
+                    <div>
+                      <p className="text-[11px] uppercase tracking-wider text-slate-500">Solo/Dúo</p>
+                      <p
+                        className={`text-sm font-semibold ${
+                          x.solo ? TIER_COLORS[x.solo.tier?.toUpperCase()] || "text-slate-300" : "text-slate-600"
+                        }`}
+                      >
+                        {rankLabel(x.solo)}
+                      </p>
+                    </div>
+                    <div className="sm:text-right">
+                      <p className="text-[11px] uppercase tracking-wider text-slate-500">Flex</p>
+                      <p
+                        className={`text-sm font-semibold ${
+                          x.flex ? TIER_COLORS[x.flex.tier?.toUpperCase()] || "text-slate-300" : "text-slate-600"
+                        }`}
+                      >
+                        {rankLabel(x.flex)}
+                      </p>
                     </div>
                   </div>
                 ))}
@@ -150,7 +272,7 @@ export default function Home() {
             </section>
 
             <section className="mb-8">
-              <h2 className="mb-4 text-lg font-bold">Perfiles</h2>
+              <h2 className="mb-4 text-lg font-bold">Amigos</h2>
               <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
                 {data.friends.map((f) => (
                   <PlayerCard key={f.id} friend={f} onRemoved={load} />
@@ -158,13 +280,25 @@ export default function Home() {
               </div>
             </section>
 
-            <section className="mb-8">
-              <ChampionPool friends={data.friends} />
-            </section>
-
             <section>
+              <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center">
+                <h2 className="mr-2 text-lg font-bold">Historial de partidas</h2>
+                <p className="text-sm text-slate-500">
+                  {matchTotal} guardadas
+                  {oldestSync ? ` · historial hasta ${timeAgo(oldestSync)}` : ""}
+                </p>
+                <div className="flex flex-wrap gap-2 sm:ml-auto">
+                  <button
+                    onClick={() => sync("backfill")}
+                    disabled={Boolean(syncing) || loading}
+                    className="rounded-xl border border-cyan-800 bg-cyan-950/40 px-4 py-2 text-sm font-semibold text-cyan-300 hover:border-cyan-500 disabled:opacity-50"
+                  >
+                    {syncing === "backfill" ? "Trayendo…" : "Traer +5 días"}
+                  </button>
+                </div>
+              </div>
+
               <div className="mb-4 flex flex-wrap items-center gap-2">
-                <h2 className="mr-2 text-lg font-bold">Últimas partidas</h2>
                 <button
                   onClick={() => setFilter("Todos")}
                   className={`rounded-lg px-3 py-1.5 text-sm ${filter === "Todos" ? "bg-cyan-400 text-slate-950" : "bg-slate-900 text-slate-400"}`}
@@ -191,6 +325,7 @@ export default function Home() {
                   </button>
                 ))}
               </div>
+
               <div className="grid gap-3">
                 {matches.length ? (
                   matches.map((m) => (
@@ -198,10 +333,22 @@ export default function Home() {
                   ))
                 ) : (
                   <p className="rounded-2xl border border-slate-800 bg-slate-900/40 p-8 text-center text-slate-500">
-                    No hay partidas con estos filtros.
+                    No hay partidas guardadas. Tocá <b>Actualizar partidas</b> o <b>Traer +5 días</b>.
                   </p>
                 )}
               </div>
+
+              {(hasMoreDb || allMatches.length < matchTotal) && (
+                <div className="mt-4 flex justify-center">
+                  <button
+                    onClick={loadMoreFromDb}
+                    disabled={loadingMore}
+                    className="rounded-xl border border-slate-700 bg-slate-900 px-5 py-3 text-sm font-semibold hover:border-cyan-500 disabled:opacity-50"
+                  >
+                    {loadingMore ? "Cargando…" : "Mostrar más del historial"}
+                  </button>
+                </div>
+              )}
             </section>
           </>
         )}
@@ -214,15 +361,5 @@ export default function Home() {
 
       {selectedMatch && <MatchDetailModal matchId={selectedMatch} onClose={() => setSelectedMatch(null)} />}
     </main>
-  );
-}
-
-function Stat({ title, value, hint }: { title: string; value: string | number; hint?: string }) {
-  return (
-    <div className="rounded-2xl border border-slate-800 bg-slate-900/60 p-5">
-      <p className="text-sm text-slate-500">{title}</p>
-      <p className="mt-1 text-3xl font-black">{value}</p>
-      {hint && <p className="mt-1 truncate text-xs text-slate-600">{hint}</p>}
-    </div>
   );
 }
