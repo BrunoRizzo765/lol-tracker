@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { getFriendMatches, parseFriends, participantFor } from "@/lib/riot";
+import { getFriendMatches, parseFriends, participantFor } from "/lib/riot";
 
 export const runtime = "nodejs";
 
