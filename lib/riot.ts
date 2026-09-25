@@ -286,6 +286,20 @@ export async function getChampionsById(): Promise<Map<number, { id: string; name
   return map;
 }
 
+type SpellData = { data: Record<string, { id: string; key: string; image: { full: string } }> };
+
+export async function getSummonerSpellsById(): Promise<Map<number, { id: string; image: string }>> {
+  const version = await getDDragonVersion();
+  const res = await fetch(`${DDRAGON}/cdn/${version}/data/en_US/summoner.json`, { next: { revalidate: 86400 } });
+  if (!res.ok) throw new Error("DDRAGON_SPELLS");
+  const json = (await res.json()) as SpellData;
+  const map = new Map<number, { id: string; image: string }>();
+  for (const spell of Object.values(json.data)) {
+    map.set(Number(spell.key), { id: spell.id, image: spell.image.full });
+  }
+  return map;
+}
+
 // --- Spectator (live games) ---
 
 type CurrentGame = {
@@ -307,14 +321,31 @@ type CurrentGame = {
   bannedChampions: { championId: number; teamId: number; pickTurn: number }[];
 };
 
+function parseRiotIdField(riotId?: string, summonerName?: string) {
+  if (riotId && riotId.includes("#")) {
+    const idx = riotId.lastIndexOf("#");
+    return { name: riotId.slice(0, idx), tag: riotId.slice(idx + 1) };
+  }
+  if (riotId) return { name: riotId, tag: "" };
+  return { name: summonerName || "Invocador", tag: "" };
+}
+
 export async function getLiveGameByPuuid(
   puuid: string,
   friendName: string,
   friendTag: string,
   preferredPlatform?: string | null,
+  friendPuids: string[] = [],
 ) {
-  const champions = await getChampionsById().catch(() => new Map<number, { id: string; name: string }>());
-  const champName = (id: number) => champions.get(id)?.id ?? String(id);
+  const [champions, spells, version] = await Promise.all([
+    getChampionsById().catch(() => new Map<number, { id: string; name: string }>()),
+    getSummonerSpellsById().catch(() => new Map<number, { id: string; image: string }>()),
+    getDDragonVersion().catch(() => null),
+  ]);
+  const champMeta = (id: number) => champions.get(id);
+  const spellImg = (id: number) => spells.get(id)?.image || "";
+
+  const tracked = new Set([puuid, ...friendPuids]);
 
   for (const platform of platformsToTry(preferredPlatform)) {
     let game: CurrentGame;
@@ -335,6 +366,36 @@ export async function getLiveGameByPuuid(
         ? Math.max(0, Math.floor((Date.now() - game.gameStartTime) / 1000))
         : game.gameLength;
 
+    const participants = game.participants.map((p) => {
+      const identity = parseRiotIdField(p.riotId, p.summonerName);
+      const champ = champMeta(p.championId);
+      return {
+        puuid: p.puuid,
+        name: identity.name,
+        tag: identity.tag,
+        champion: champ?.id || String(p.championId),
+        teamId: p.teamId,
+        spell1Id: p.spell1Id,
+        spell2Id: p.spell2Id,
+        spell1Image: spellImg(p.spell1Id),
+        spell2Image: spellImg(p.spell2Id),
+        isFriend: tracked.has(p.puuid),
+      };
+    });
+
+    const friendsInGame = participants
+      .filter((p) => p.isFriend)
+      .map((p) => (p.tag ? `${p.name}#${p.tag}` : p.name));
+
+    const bans = (game.bannedChampions || [])
+      .filter((b) => b.championId > 0)
+      .map((b) => ({
+        champion: champMeta(b.championId)?.id || String(b.championId),
+        teamId: b.teamId,
+        pickTurn: b.pickTurn,
+      }))
+      .sort((a, b) => a.pickTurn - b.pickTurn);
+
     return {
       friend: friendName,
       tag: friendTag,
@@ -343,9 +404,16 @@ export async function getLiveGameByPuuid(
       mode: game.gameMode,
       startTime: game.gameStartTime,
       length: elapsed,
-      championName: me ? champName(me.championId) : "",
+      championName: me ? champMeta(me.championId)?.id || "" : "",
       teamId: me?.teamId ?? 100,
       platform,
+      ddragonVersion: version,
+      friendsInGame,
+      bans,
+      teams: [100, 200].map((teamId) => ({
+        teamId,
+        participants: participants.filter((p) => p.teamId === teamId),
+      })),
     };
   }
 

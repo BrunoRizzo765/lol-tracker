@@ -25,6 +25,25 @@ export type Rank = {
   winRate: number;
 };
 
+export type LiveParticipant = {
+  puuid: string;
+  name: string;
+  tag: string;
+  champion: string;
+  teamId: number;
+  spell1Id: number;
+  spell2Id: number;
+  spell1Image: string;
+  spell2Image: string;
+  isFriend: boolean;
+};
+
+export type LiveBan = {
+  champion: string;
+  teamId: number;
+  pickTurn: number;
+};
+
 export type LiveGame = {
   friend: string;
   tag: string;
@@ -35,6 +54,14 @@ export type LiveGame = {
   length: number;
   championName: string;
   teamId: number;
+  platform?: string;
+  ddragonVersion?: string | null;
+  friendsInGame: string[];
+  bans: LiveBan[];
+  teams: {
+    teamId: number;
+    participants: LiveParticipant[];
+  }[];
 };
 
 export type Friend = {

@@ -2,11 +2,12 @@
 
 import { useEffect, useMemo, useState } from "react";
 import type { Dashboard, Match } from "/lib/types";
-import { formatDuration, queueName, rankLabel, TIER_COLORS, timeAgo } from "/lib/format";
+import { rankLabel, TIER_COLORS, timeAgo } from "/lib/format";
 import { MatchCard } from "/components/match-card";
 import { PlayerCard } from "/components/player-card";
 import { AddFriendForm } from "/components/add-friend-form";
 import { MatchDetailModal } from "/components/match-detail-modal";
+import { LiveGameCard } from "/components/live-game-card";
 
 type ResultFilter = "Todos" | "Victorias" | "Derrotas";
 
@@ -195,33 +196,15 @@ export default function Home() {
                 <h2 className="text-lg font-bold">Jugando ahora</h2>
                 <p className="text-sm text-slate-500">
                   {liveCount
-                    ? `${liveCount} amigo${liveCount === 1 ? "" : "s"} en partida`
+                    ? `${liveCount} partida${liveCount === 1 ? "" : "s"} en curso · equipos, bans y hechizos`
                     : "Nadie del grupo está en una partida ahora"}
                 </p>
               </div>
               {liveCount ? (
-                <div className="divide-y divide-slate-800">
-                  {data.live.map((g) => (
-                    <div
-                      key={`${g.friend}-${g.gameId}`}
-                      className="flex flex-wrap items-center justify-between gap-3 px-5 py-4"
-                    >
-                      <div>
-                        <p className="font-bold text-emerald-300">
-                          {g.friend}
-                          <span className="text-slate-500">#{g.tag}</span>
-                        </p>
-                        <p className="text-sm text-slate-400">
-                          {g.championName || "Campeón"} · {queueName(g.queueId)}
-                        </p>
-                      </div>
-                      <p className="text-sm font-semibold text-slate-300">{formatDuration(g.length)}</p>
-                    </div>
-                  ))}
-                </div>
+                data.live.map((g) => <LiveGameCard key={g.gameId} game={g} />)
               ) : (
                 <p className="px-5 py-8 text-center text-sm text-slate-600">
-                  Cuando alguien entre a una partida, aparece acá.
+                  Cuando alguien entre a una partida, aparece acá el lobby completo.
                 </p>
               )}
             </section>

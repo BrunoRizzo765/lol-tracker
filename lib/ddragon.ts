@@ -5,3 +5,6 @@ export const champIcon = (version: string | null | undefined, championId: string
 
 export const itemIcon = (version: string | null | undefined, itemId: number) =>
   version && itemId ? `${CDN}/${version}/img/item/${itemId}.png` : "";
+
+export const spellIcon = (version: string | null | undefined, spellImage: string) =>
+  version && spellImage ? `${CDN}/${version}/img/spell/${spellImage}` : "";

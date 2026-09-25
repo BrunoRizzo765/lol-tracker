@@ -9,6 +9,7 @@ import {
   riotKeyConfigured,
   splitRanks,
 } from "/lib/riot";
+import type { LiveGame } from "/lib/types";
 
 export const runtime = "nodejs";
 
@@ -44,13 +45,45 @@ export async function GET(request: Request) {
     );
   }
 
-  const result = [];
+  // Resolve accounts first so live games can mark every friend in the lobby.
+  const accounts = [];
   for (const friend of friends) {
     try {
       const account = friend.puuid
         ? { puuid: friend.puuid, gameName: friend.gameName, tagLine: friend.tagLine }
         : await getAccount(friend.gameName, friend.tagLine);
+      accounts.push({ friend, account, error: null as string | null });
+    } catch (error) {
+      accounts.push({
+        friend,
+        account: null,
+        error: error instanceof Error ? error.message : "ACCOUNT_ERROR",
+      });
+    }
+  }
 
+  const friendPuids = accounts.map((a) => a.account?.puuid).filter((p): p is string => Boolean(p));
+
+  const result = [];
+  for (const row of accounts) {
+    const { friend, account, error: accountError } = row;
+    if (!account) {
+      result.push({
+        id: `${friend.gameName}#${friend.tagLine}`,
+        dbId: friend.id,
+        name: friend.gameName,
+        tag: friend.tagLine,
+        solo: null,
+        flex: null,
+        rank: null,
+        live: null,
+        matches: [],
+        error: accountError || "ACCOUNT_ERROR",
+      });
+      continue;
+    }
+
+    try {
       const [rankedResult, live, storedMatches] = await Promise.all([
         getRankedEntries(account.puuid, friend.platform)
           .then((r) => ({ ranked: r.entries, platform: r.platform, rankError: null as string | null }))
@@ -59,9 +92,13 @@ export async function GET(request: Request) {
             platform: friend.platform,
             rankError: error instanceof Error ? error.message : "RANK_ERROR",
           })),
-        getLiveGameByPuuid(account.puuid, account.gameName, account.tagLine, friend.platform).catch(
-          () => null,
-        ),
+        getLiveGameByPuuid(
+          account.puuid,
+          account.gameName,
+          account.tagLine,
+          friend.platform,
+          friendPuids,
+        ).catch(() => null),
         listMatchesForFriend(friend.id, 12),
       ]);
 
@@ -96,10 +133,10 @@ export async function GET(request: Request) {
     } catch (error) {
       const message = error instanceof Error ? error.message : "UNKNOWN_ERROR";
       result.push({
-        id: `${friend.gameName}#${friend.tagLine}`,
+        id: account.puuid,
         dbId: friend.id,
-        name: friend.gameName,
-        tag: friend.tagLine,
+        name: account.gameName,
+        tag: account.tagLine,
         solo: null,
         flex: null,
         rank: null,
@@ -134,15 +171,27 @@ export async function GET(request: Request) {
       return b.score - a.score;
     });
 
+  // One card per live match (several friends may be in the same game).
+  const liveByGame = new Map<number, LiveGame>();
+  for (const friend of result) {
+    if (!friend.live) continue;
+    const existing = liveByGame.get(friend.live.gameId);
+    if (!existing) {
+      liveByGame.set(friend.live.gameId, friend.live);
+    } else {
+      const merged = new Set([...(existing.friendsInGame || []), ...(friend.live.friendsInGame || [])]);
+      existing.friendsInGame = [...merged];
+    }
+  }
+
   const { matches: recent, total: matchTotal } = await listMatches({ limit: matchLimit });
-  const live = result.map((f) => f.live).filter(Boolean);
 
   return NextResponse.json({
     friends: result,
     recent,
     matchTotal,
     hasMoreMatches: recent.length < matchTotal,
-    live,
+    live: [...liveByGame.values()],
     ladder,
   });
 }
