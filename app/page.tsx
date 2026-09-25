@@ -2,12 +2,13 @@
 
 import { useEffect, useMemo, useState } from "react";
 import type { Dashboard, Match } from "/lib/types";
-import { rankLabel, TIER_COLORS, timeAgo } from "/lib/format";
+import { timeAgo } from "/lib/format";
 import { MatchCard } from "/components/match-card";
 import { PlayerCard } from "/components/player-card";
 import { AddFriendForm } from "/components/add-friend-form";
 import { MatchDetailModal } from "/components/match-detail-modal";
 import { LiveGameCard } from "/components/live-game-card";
+import { RankBadge } from "/components/rank-badge";
 
 type ResultFilter = "Todos" | "Victorias" | "Derrotas";
 
@@ -239,24 +240,12 @@ export default function Home() {
                       </p>
                     </div>
                     <div>
-                      <p className="text-[11px] uppercase tracking-wider text-slate-500">Solo/Dúo</p>
-                      <p
-                        className={`text-sm font-semibold ${
-                          x.solo ? TIER_COLORS[x.solo.tier?.toUpperCase()] || "text-slate-300" : "text-slate-600"
-                        }`}
-                      >
-                        {rankLabel(x.solo)}
-                      </p>
+                      <p className="mb-1 text-[11px] uppercase tracking-wider text-slate-500">Solo/Dúo</p>
+                      <RankBadge rank={x.solo} size={26} />
                     </div>
                     <div className="sm:text-right">
-                      <p className="text-[11px] uppercase tracking-wider text-slate-500">Flex</p>
-                      <p
-                        className={`text-sm font-semibold ${
-                          x.flex ? TIER_COLORS[x.flex.tier?.toUpperCase()] || "text-slate-300" : "text-slate-600"
-                        }`}
-                      >
-                        {rankLabel(x.flex)}
-                      </p>
+                      <p className="mb-1 text-[11px] uppercase tracking-wider text-slate-500">Flex</p>
+                      <RankBadge rank={x.flex} size={26} align="right" />
                     </div>
                   </div>
                 ))}

@@ -2,7 +2,8 @@
 
 import { useState } from "react";
 import type { Friend } from "/lib/types";
-import { queueLabel, rankLabel, timeAgo, TIER_COLORS } from "/lib/format";
+import { queueLabel, timeAgo } from "/lib/format";
+import { RankBadge } from "/components/rank-badge";
 
 export function PlayerCard({
   friend,
@@ -13,8 +14,6 @@ export function PlayerCard({
 }) {
   const [removing, setRemoving] = useState(false);
   const last = [...friend.matches].sort((a, b) => b.date - a.date)[0];
-  const soloColor = friend.solo ? TIER_COLORS[friend.solo.tier?.toUpperCase()] || "text-slate-300" : "text-slate-500";
-  const flexColor = friend.flex ? TIER_COLORS[friend.flex.tier?.toUpperCase()] || "text-slate-300" : "text-slate-500";
 
   async function remove() {
     if (!friend.dbId || !confirm(`¿Quitar a ${friend.name}#${friend.tag}?`)) return;
@@ -69,8 +68,8 @@ export function PlayerCard({
       </div>
 
       <div className="grid gap-2">
-        <RankRow label="Solo/Dúo" rank={friend.solo} color={soloColor} />
-        <RankRow label="Flex" rank={friend.flex} color={flexColor} />
+        <RankRow label="Solo/Dúo" rank={friend.solo} />
+        <RankRow label="Flex" rank={friend.flex} />
       </div>
 
       {friend.rankError && (
@@ -87,15 +86,7 @@ export function PlayerCard({
   );
 }
 
-function RankRow({
-  label,
-  rank,
-  color,
-}: {
-  label: string;
-  rank: Friend["solo"];
-  color: string;
-}) {
+function RankRow({ label, rank }: { label: string; rank: Friend["solo"] }) {
   return (
     <div className="rounded-xl border border-slate-800 bg-slate-950/40 px-3 py-2">
       <div className="flex items-baseline justify-between gap-2">
@@ -106,8 +97,10 @@ function RankRow({
           </p>
         )}
       </div>
-      <p className={`font-semibold ${color}`}>{rankLabel(rank)}</p>
-      {rank && <p className="text-[11px] text-slate-600">{queueLabel(rank.queue)}</p>}
+      <div className="mt-1">
+        <RankBadge rank={rank} size={32} />
+      </div>
+      {rank && <p className="mt-0.5 text-[11px] text-slate-600">{queueLabel(rank.queue)}</p>}
     </div>
   );
 }
