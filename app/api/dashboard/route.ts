@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { getFriendMatches, parseFriends, participantFor } from "/lib/riot";
+import { getFriendMatches, parseFriends, participantFor, pickSoloQueue, rankScore } from "/lib/riot";
 
 export const runtime = "nodejs";
 
@@ -10,11 +10,24 @@ export async function GET() {
   const result = [];
   for (const friend of friends) {
     try {
-      const { account, matches } = await getFriendMatches(friend.gameName, friend.tagLine, 8);
+      const { account, matches, ranked } = await getFriendMatches(friend.gameName, friend.tagLine, 8);
+      const solo = pickSoloQueue(ranked);
       result.push({
         id: account.puuid,
         name: account.gameName,
         tag: account.tagLine,
+        rank: solo
+          ? {
+              queue: solo.queueType,
+              tier: solo.tier,
+              division: solo.rank,
+              lp: solo.leaguePoints,
+              wins: solo.wins,
+              losses: solo.losses,
+              winRate: solo.wins + solo.losses ? Math.round((solo.wins / (solo.wins + solo.losses)) * 100) : 0,
+              hotStreak: solo.hotStreak,
+            }
+          : null,
         matches: matches.map((match) => {
           const p = participantFor(match, account.puuid);
           return p ? {
@@ -36,9 +49,20 @@ export async function GET() {
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : "UNKNOWN_ERROR";
-      result.push({ id: `${friend.gameName}#${friend.tagLine}`, name: friend.gameName, tag: friend.tagLine, matches: [], error: message });
+      result.push({ id: `${friend.gameName}#${friend.tagLine}`, name: friend.gameName, tag: friend.tagLine, rank: null, matches: [], error: message });
     }
   }
+
+  const ladder = result
+    .map((friend) => ({
+      name: friend.name,
+      tag: friend.tag,
+      rank: friend.rank,
+      score: rankScore(
+        friend.rank ? { tier: friend.rank.tier, rank: friend.rank.division, leaguePoints: friend.rank.lp } : null,
+      ),
+    }))
+    .sort((a, b) => b.score - a.score);
 
   const allMatches = result.flatMap((friend) => friend.matches.map((match) => ({ ...match, friend: friend.name })));
   const valid = allMatches.filter(Boolean) as Array<NonNullable<(typeof result)[number]["matches"][number]> & { friend: string }>;
@@ -52,5 +76,5 @@ export async function GET() {
   }).sort((a, b) => b.winRate - a.winRate || b.kda - a.kda);
 
   valid.sort((a, b) => b.date - a.date);
-  return NextResponse.json({ friends: result, recent: valid.slice(0, 30), ranking: stats });
+  return NextResponse.json({ friends: result, recent: valid.slice(0, 30), ranking: stats, ladder });
 }
