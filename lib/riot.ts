@@ -7,6 +7,19 @@ if (!API_KEY) console.warn("RIOT_API_KEY is not configured.");
 type RiotAccount = { puuid: string; gameName: string; tagLine: string };
 type MatchList = string[];
 
+type LeagueEntry = {
+  queueType: string;
+  tier: string;
+  rank: string;
+  leaguePoints: number;
+  wins: number;
+  losses: number;
+  hotStreak: boolean;
+  veteran: boolean;
+  freshBlood: boolean;
+  inactive: boolean;
+};
+
 type Match = {
   metadata: { matchId: string; participants: string[] };
   info: {
@@ -76,11 +89,44 @@ export async function getMatch(matchId: string) {
   );
 }
 
+export async function getRankedEntries(puuid: string) {
+  return riotFetch<LeagueEntry[]>(
+    `https://${PLATFORM}.api.riotgames.com`,
+    `/lol/league/v4/entries/by-puuid/${encodeURIComponent(puuid)}`,
+    600,
+  );
+}
+
 export async function getFriendMatches(gameName: string, tagLine: string, count = 8) {
   const account = await getAccount(gameName, tagLine);
-  const ids = await getMatchIds(account.puuid, count);
+  const [ids, ranked] = await Promise.all([
+    getMatchIds(account.puuid, count),
+    getRankedEntries(account.puuid).catch(() => [] as LeagueEntry[]),
+  ]);
   const matches = await Promise.all(ids.map((id) => getMatch(id)));
-  return { account, matches };
+  return { account, matches, ranked };
+}
+
+const TIER_ORDER: Record<string, number> = {
+  CHALLENGER: 9, GRANDMASTER: 8, MASTER: 7, DIAMOND: 6, EMERALD: 5,
+  PLATINUM: 4, GOLD: 3, SILVER: 2, BRONZE: 1, IRON: 0,
+};
+const DIVISION_ORDER: Record<string, number> = { I: 4, II: 3, III: 2, IV: 1 };
+
+export function rankScore(entry: Pick<LeagueEntry, "tier" | "rank" | "leaguePoints"> | null) {
+  if (!entry) return -1;
+  const tier = TIER_ORDER[entry.tier?.toUpperCase()] ?? 0;
+  const division = DIVISION_ORDER[entry.rank?.toUpperCase()] ?? 0;
+  return tier * 10000 + division * 1000 + entry.leaguePoints;
+}
+
+export function pickSoloQueue(entries: LeagueEntry[] | undefined) {
+  if (!entries?.length) return null;
+  return (
+    entries.find((e) => e.queueType === "RANKED_SOLO_5x5") ??
+    entries.find((e) => e.queueType === "RANKED_FLEX_SR") ??
+    entries[0]
+  );
 }
 
 export function parseFriends() {
@@ -100,4 +146,4 @@ export function participantFor(match: Match, puuid: string) {
   return match.info.participants.find((p) => p.puuid === puuid) ?? null;
 }
 
-export type { Match, Participant, RiotAccount };
+export type { Match, Participant, RiotAccount, LeagueEntry };

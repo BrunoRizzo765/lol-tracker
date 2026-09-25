@@ -3,10 +3,16 @@
 import { useEffect, useMemo, useState } from "react";
 
 type Match = { id: string; date: number; duration: number; queueId: number; mode: string; champion: string; kills: number; deaths: number; assists: number; win: boolean; cs: number; level: number; gold: number; friend: string };
-type Friend = { id: string; name: string; tag: string; matches: Match[]; error?: string };
-type Dashboard = { friends: Friend[]; recent: Match[]; ranking: { name: string; tag: string; games: number; wins: number; losses: number; winRate: number; kda: number }[] };
+type Rank = { queue: string; tier: string; division: string; lp: number; wins: number; losses: number; winRate: number; hotStreak: boolean };
+type Friend = { id: string; name: string; tag: string; rank: Rank | null; matches: Match[]; error?: string };
+type LadderEntry = { name: string; tag: string; rank: Rank | null; score: number };
+type Dashboard = { friends: Friend[]; recent: Match[]; ranking: { name: string; tag: string; games: number; wins: number; losses: number; winRate: number; kda: number }[]; ladder: LadderEntry[] };
 
 const queueName = (id: number) => ({ 420: "Ranked Solo", 440: "Ranked Flex", 450: "ARAM", 490: "Quickplay", 1700: "Arena", 1710: "Arena" } as Record<number, string>)[id] || "League of Legends";
+const TIER_COLORS: Record<string, string> = { CHALLENGER: "text-amber-300", GRANDMASTER: "text-red-400", MASTER: "text-fuchsia-400", DIAMOND: "text-sky-300", EMERALD: "text-emerald-400", PLATINUM: "text-teal-300", GOLD: "text-yellow-400", SILVER: "text-slate-300", BRONZE: "text-orange-400", IRON: "text-slate-500" };
+const rankLabel = (r: Rank | null) => !r ? "Sin clasificar" : ["MASTER", "GRANDMASTER", "CHALLENGER"].includes(r.tier?.toUpperCase()) ? `${cap(r.tier)} ${r.lp} LP` : `${cap(r.tier)} ${r.division} · ${r.lp} LP`;
+const cap = (s: string) => s ? s.charAt(0).toUpperCase() + s.slice(1).toLowerCase() : s;
+const queueLabel = (q: string) => q === "RANKED_SOLO_5x5" ? "Solo/Dúo" : q === "RANKED_FLEX_SR" ? "Flex" : q;
 const timeAgo = (timestamp: number) => { const diff = Math.max(0, Date.now() - timestamp); const m = Math.floor(diff / 60000); if (m < 60) return `hace ${m} min`; const h = Math.floor(m / 60); if (h < 24) return `hace ${h} h`; return `hace ${Math.floor(h / 24)} d`; };
 
 export default function Home() {
@@ -42,8 +48,8 @@ export default function Home() {
         </section>
 
         <section className="mb-8 overflow-hidden rounded-2xl border border-slate-800 bg-slate-900/60">
-          <div className="border-b border-slate-800 px-5 py-4"><h2 className="text-lg font-bold">Ranking</h2><p className="text-sm text-slate-500">Calculado sobre las últimas 8 partidas de cada amigo.</p></div>
-          <div className="divide-y divide-slate-800">{data.ranking.map((x, i) => <div key={x.name} className="grid grid-cols-[40px_1fr_auto_auto] items-center gap-4 px-5 py-4"><span className="text-xl font-black text-slate-500">#{i + 1}</span><div><p className="font-bold">{x.name}</p><p className="text-xs text-slate-500">{x.games} partidas · {x.wins}W {x.losses}L</p></div><div className="text-right"><p className="font-bold text-cyan-400">{x.winRate}%</p><p className="text-xs text-slate-500">win rate</p></div><div className="hidden text-right sm:block"><p className="font-bold">{x.kda}</p><p className="text-xs text-slate-500">KDA</p></div></div>)}</div>
+          <div className="border-b border-slate-800 px-5 py-4"><h2 className="text-lg font-bold">Ranking clasificatorio</h2><p className="text-sm text-slate-500">Elo actual de cada amigo (Solo/Dúo, o Flex si no juega Solo).</p></div>
+          <div className="divide-y divide-slate-800">{data.ladder.map((x, i) => <div key={`${x.name}#${x.tag}`} className="grid grid-cols-[40px_1fr_auto] items-center gap-4 px-5 py-4"><span className="text-xl font-black text-slate-500">#{i + 1}</span><div className="min-w-0"><p className="flex items-center gap-2 font-bold">{x.name}{x.rank?.hotStreak && <span title="Racha de victorias" className="text-orange-400">🔥</span>}</p><p className={`text-sm font-semibold ${x.rank ? TIER_COLORS[x.rank.tier?.toUpperCase()] || "text-slate-300" : "text-slate-500"}`}>{rankLabel(x.rank)}</p></div><div className="text-right">{x.rank ? <><p className="font-bold text-cyan-400">{x.rank.winRate}%</p><p className="text-xs text-slate-500">{x.rank.wins}V {x.rank.losses}D · {queueLabel(x.rank.queue)}</p></> : <p className="text-xs text-slate-600">—</p>}</div></div>)}</div>
         </section>
 
         <section><div className="mb-4 flex flex-wrap items-center gap-2"><h2 className="mr-2 text-lg font-bold">Últimas partidas</h2><button onClick={() => setFilter("Todos")} className={`rounded-lg px-3 py-1.5 text-sm ${filter === "Todos" ? "bg-cyan-400 text-slate-950" : "bg-slate-900 text-slate-400"}`}>Todos</button>{data.friends.map(f => <button key={f.id} onClick={() => setFilter(f.name)} className={`rounded-lg px-3 py-1.5 text-sm ${filter === f.name ? "bg-cyan-400 text-slate-950" : "bg-slate-900 text-slate-400"}`}>{f.name}</button>)}</div>
