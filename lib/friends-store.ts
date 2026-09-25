@@ -6,6 +6,7 @@ export type StoredFriend = {
   gameName: string;
   tagLine: string;
   puuid: string | null;
+  platform: string | null;
   syncedNewest: number | null;
   syncedOldest: number | null;
   lastSyncAt: string | null;
@@ -16,6 +17,7 @@ type Row = {
   game_name: string;
   tag_line: string;
   puuid: string | null;
+  platform: string | null;
   synced_newest: string | number | null;
   synced_oldest: string | number | null;
   last_sync_at: Date | string | null;
@@ -29,6 +31,7 @@ const toFriend = (r: Row): StoredFriend => ({
   gameName: r.game_name,
   tagLine: r.tag_line,
   puuid: r.puuid,
+  platform: r.platform,
   syncedNewest: toNum(r.synced_newest),
   syncedOldest: toNum(r.synced_oldest),
   lastSyncAt: r.last_sync_at ? new Date(r.last_sync_at).toISOString() : null,
@@ -37,7 +40,7 @@ const toFriend = (r: Row): StoredFriend => ({
 async function selectAll() {
   await ensureSchema();
   const { rows } = await pool.query<Row>(
-    `SELECT id, game_name, tag_line, puuid, synced_newest, synced_oldest, last_sync_at
+    `SELECT id, game_name, tag_line, puuid, platform, synced_newest, synced_oldest, last_sync_at
      FROM friends ORDER BY created_at ASC, id ASC`,
   );
   return rows;
@@ -67,7 +70,7 @@ export async function addFriend(gameName: string, tagLine: string): Promise<Stor
   const { rows } = await pool.query<Row>(
     `INSERT INTO friends (game_name, tag_line) VALUES ($1, $2)
      ON CONFLICT (game_name, tag_line) DO UPDATE SET game_name = EXCLUDED.game_name
-     RETURNING id, game_name, tag_line, puuid, synced_newest, synced_oldest, last_sync_at`,
+     RETURNING id, game_name, tag_line, puuid, platform, synced_newest, synced_oldest, last_sync_at`,
     [gameName, tagLine],
   );
   return toFriend(rows[0]);
@@ -82,6 +85,7 @@ export async function updateFriendSync(
   id: number,
   data: {
     puuid?: string;
+    platform?: string;
     syncedNewest?: number | null;
     syncedOldest?: number | null;
   },
@@ -90,11 +94,18 @@ export async function updateFriendSync(
   await pool.query(
     `UPDATE friends SET
        puuid = COALESCE($2, puuid),
-       synced_newest = CASE WHEN $3::bigint IS NULL THEN synced_newest ELSE $3::bigint END,
-       synced_oldest = CASE WHEN $4::bigint IS NULL THEN synced_oldest ELSE $4::bigint END,
+       platform = COALESCE($3, platform),
+       synced_newest = CASE WHEN $4::bigint IS NULL THEN synced_newest ELSE $4::bigint END,
+       synced_oldest = CASE WHEN $5::bigint IS NULL THEN synced_oldest ELSE $5::bigint END,
        last_sync_at = NOW()
      WHERE id = $1`,
-    [id, data.puuid ?? null, data.syncedNewest ?? null, data.syncedOldest ?? null],
+    [
+      id,
+      data.puuid ?? null,
+      data.platform ?? null,
+      data.syncedNewest ?? null,
+      data.syncedOldest ?? null,
+    ],
   );
 }
 

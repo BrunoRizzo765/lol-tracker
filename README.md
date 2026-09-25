@@ -9,7 +9,7 @@ Dashboard privado para ver rangos, partidas y scoreboards de un grupo de amigos 
 
 ## Configuración local
 1. Copiá `.env.example` a `.env.local`.
-2. Poné tu `RIOT_API_KEY`.
+2. Poné tu `RIOT_API_KEY` real de [developer.riotgames.com](https://developer.riotgames.com) en `.env.local` (sin esto no hay rangos ni partidas). Las Development keys caducan cada 24 horas.
 3. Levantá Postgres (opción rápida con Docker):
 
 ```bash

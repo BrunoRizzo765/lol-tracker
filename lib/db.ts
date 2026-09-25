@@ -16,11 +16,6 @@ CREATE TABLE IF NOT EXISTS friends (
   UNIQUE (game_name, tag_line)
 );
 
-ALTER TABLE friends ADD COLUMN IF NOT EXISTS puuid TEXT;
-ALTER TABLE friends ADD COLUMN IF NOT EXISTS synced_newest BIGINT;
-ALTER TABLE friends ADD COLUMN IF NOT EXISTS synced_oldest BIGINT;
-ALTER TABLE friends ADD COLUMN IF NOT EXISTS last_sync_at TIMESTAMPTZ;
-
 CREATE TABLE IF NOT EXISTS matches (
   friend_id     INTEGER NOT NULL REFERENCES friends(id) ON DELETE CASCADE,
   match_id      TEXT NOT NULL,
@@ -44,13 +39,26 @@ CREATE INDEX IF NOT EXISTS matches_creation_idx ON matches (game_creation DESC);
 CREATE INDEX IF NOT EXISTS matches_friend_creation_idx ON matches (friend_id, game_creation DESC);
 `;
 
+const MIGRATIONS = `
+ALTER TABLE friends ADD COLUMN IF NOT EXISTS puuid TEXT;
+ALTER TABLE friends ADD COLUMN IF NOT EXISTS platform TEXT;
+ALTER TABLE friends ADD COLUMN IF NOT EXISTS synced_newest BIGINT;
+ALTER TABLE friends ADD COLUMN IF NOT EXISTS synced_oldest BIGINT;
+ALTER TABLE friends ADD COLUMN IF NOT EXISTS last_sync_at TIMESTAMPTZ;
+`;
+
 /** Ensures tables/columns exist. Safe to call on every request. */
 export async function ensureSchema() {
   if (!process.env.DATABASE_URL) {
     throw new Error("Missing DATABASE_URL");
   }
   if (!globalForPg._pgReady) {
-    globalForPg._pgReady = pool.query(SCHEMA).then(() => undefined);
+    globalForPg._pgReady = (async () => {
+      await pool.query(SCHEMA);
+      await pool.query(MIGRATIONS);
+    })();
   }
   await globalForPg._pgReady;
+  // Re-run cheap IF NOT EXISTS alters so hot-reload picks new columns.
+  await pool.query(MIGRATIONS);
 }

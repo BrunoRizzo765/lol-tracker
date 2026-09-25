@@ -2,7 +2,13 @@ const API_KEY = process.env.RIOT_API_KEY;
 const PLATFORM = process.env.RIOT_REGION || "la1";
 const REGIONAL = process.env.RIOT_REGIONAL || "americas";
 
-if (!API_KEY) console.warn("RIOT_API_KEY is not configured.");
+export function riotKeyConfigured() {
+  return Boolean(API_KEY && API_KEY !== "RGAPI-REPLACE_ME" && API_KEY.startsWith("RGAPI-"));
+}
+
+if (!riotKeyConfigured()) {
+  console.warn("RIOT_API_KEY is missing or still set to the placeholder RGAPI-REPLACE_ME.");
+}
 
 type RiotAccount = { puuid: string; gameName: string; tagLine: string };
 type MatchList = string[];
@@ -54,9 +60,9 @@ type Participant = {
 };
 
 async function riotFetch<T>(base: string, path: string, revalidate = 120): Promise<T> {
-  if (!API_KEY || API_KEY === "RGAPI-REPLACE_ME") throw new Error("Missing RIOT_API_KEY");
+  if (!riotKeyConfigured()) throw new Error("Missing RIOT_API_KEY");
   const response = await fetch(`${base}${path}`, {
-    headers: { "X-Riot-Token": API_KEY },
+    headers: { "X-Riot-Token": API_KEY as string },
     ...(revalidate <= 0
       ? { cache: "no-store" as const }
       : { next: { revalidate } }),
@@ -104,7 +110,7 @@ export async function getMatch(matchId: string) {
   );
 }
 
-type Summoner = { id: string; puuid: string; profileIconId: number; summonerLevel: number };
+type Summoner = { id?: string; puuid: string; profileIconId: number; summonerLevel: number };
 
 /** Platforms that share the americas / europe / asia match routing. */
 const PLATFORM_FALLBACKS: Record<string, string[]> = {
@@ -114,8 +120,8 @@ const PLATFORM_FALLBACKS: Record<string, string[]> = {
   sea: ["oc1", "sg2", "tw2", "vn2"],
 };
 
-function platformsToTry(): string[] {
-  const primary = PLATFORM;
+function platformsToTry(preferred?: string | null): string[] {
+  const primary = preferred || PLATFORM;
   const group =
     PLATFORM_FALLBACKS[REGIONAL] ||
     Object.values(PLATFORM_FALLBACKS).find((list) => list.includes(primary)) ||
@@ -123,67 +129,55 @@ function platformsToTry(): string[] {
   return [primary, ...group.filter((p) => p !== primary)];
 }
 
-async function fetchRankedOnPlatform(platform: string, puuid: string): Promise<LeagueEntry[]> {
-  const base = `https://${platform}.api.riotgames.com`;
-  try {
-    return await riotFetch<LeagueEntry[]>(
-      base,
-      `/lol/league/v4/entries/by-puuid/${encodeURIComponent(puuid)}`,
-      300,
-    );
-  } catch (error) {
-    if (!(error instanceof Error) || error.message !== "RIOT_NOT_FOUND") throw error;
-  }
-
-  // by-puuid missing or 404 → resolve summoner id on this platform, then by-summoner.
-  try {
-    const summoner = await riotFetch<Summoner>(
-      base,
-      `/lol/summoner/v4/summoners/by-puuid/${encodeURIComponent(puuid)}`,
-      3600,
-    );
-    try {
-      return await riotFetch<LeagueEntry[]>(
-        base,
-        `/lol/league/v4/entries/by-summoner/${encodeURIComponent(summoner.id)}`,
-        300,
-      );
-    } catch (inner) {
-      if (inner instanceof Error && inner.message === "RIOT_NOT_FOUND") return [];
-      throw inner;
-    }
-  } catch (error) {
-    if (error instanceof Error && error.message === "RIOT_NOT_FOUND") {
-      throw new Error("PLATFORM_MISS");
-    }
-    throw error;
-  }
-}
-
-export async function getSummonerByPuuid(puuid: string) {
-  return riotFetch<Summoner>(
-    `https://${PLATFORM}.api.riotgames.com`,
-    `/lol/summoner/v4/summoners/by-puuid/${encodeURIComponent(puuid)}`,
-    3600,
-  );
-}
-
-/** Ranked entries across the regional platform group (fixes LAS/LAN/BR mismatches). */
-export async function getRankedEntries(puuid: string) {
+/**
+ * Find which platform shard hosts this PUUID.
+ * Summoner IDs were removed from Riot payloads in 2025 — only PUUID lookups remain reliable.
+ */
+export async function resolvePlatform(puuid: string, preferred?: string | null): Promise<string> {
   let lastError: Error | null = null;
-  for (const platform of platformsToTry()) {
+  for (const platform of platformsToTry(preferred)) {
     try {
-      return await fetchRankedOnPlatform(platform, puuid);
+      await riotFetch<Summoner>(
+        `https://${platform}.api.riotgames.com`,
+        `/lol/summoner/v4/summoners/by-puuid/${encodeURIComponent(puuid)}`,
+        3600,
+      );
+      return platform;
     } catch (error) {
-      if (error instanceof Error && error.message === "PLATFORM_MISS") {
+      if (error instanceof Error && error.message === "RIOT_NOT_FOUND") {
         lastError = error;
         continue;
       }
       throw error;
     }
   }
-  if (lastError) return [];
-  return [];
+  throw lastError ?? new Error("PLATFORM_NOT_FOUND");
+}
+
+export async function getSummonerByPuuid(puuid: string, platform = PLATFORM) {
+  return riotFetch<Summoner>(
+    `https://${platform}.api.riotgames.com`,
+    `/lol/summoner/v4/summoners/by-puuid/${encodeURIComponent(puuid)}`,
+    3600,
+  );
+}
+
+/**
+ * Ranked Solo/Flex for a PUUID.
+ * 1) Resolve the correct platform shard
+ * 2) Call league-v4 entries/by-puuid (summoner id is gone)
+ */
+export async function getRankedEntries(
+  puuid: string,
+  preferredPlatform?: string | null,
+): Promise<{ entries: LeagueEntry[]; platform: string }> {
+  const platform = await resolvePlatform(puuid, preferredPlatform);
+  const entries = await riotFetch<LeagueEntry[]>(
+    `https://${platform}.api.riotgames.com`,
+    `/lol/league/v4/entries/by-puuid/${encodeURIComponent(puuid)}`,
+    0,
+  );
+  return { entries: entries ?? [], platform };
 }
 
 export function toRank(entry: LeagueEntry | null | undefined) {
@@ -213,14 +207,21 @@ export async function getFriendMatches(gameName: string, tagLine: string, count 
   const [ids, rankedResult] = await Promise.all([
     getMatchIds(account.puuid, { count }),
     getRankedEntries(account.puuid)
-      .then((ranked) => ({ ranked, rankError: null as string | null }))
+      .then((r) => ({ ranked: r.entries, platform: r.platform, rankError: null as string | null }))
       .catch((error) => ({
         ranked: [] as LeagueEntry[],
+        platform: null as string | null,
         rankError: error instanceof Error ? error.message : "RANK_ERROR",
       })),
   ]);
   const matches = await Promise.all(ids.map((id) => getMatch(id)));
-  return { account, matches, ranked: rankedResult.ranked, rankError: rankedResult.rankError };
+  return {
+    account,
+    matches,
+    ranked: rankedResult.ranked,
+    platform: rankedResult.platform,
+    rankError: rankedResult.rankError,
+  };
 }
 
 const TIER_ORDER: Record<string, number> = {
@@ -306,11 +307,16 @@ type CurrentGame = {
   bannedChampions: { championId: number; teamId: number; pickTurn: number }[];
 };
 
-export async function getLiveGameByPuuid(puuid: string, friendName: string, friendTag: string) {
+export async function getLiveGameByPuuid(
+  puuid: string,
+  friendName: string,
+  friendTag: string,
+  preferredPlatform?: string | null,
+) {
   const champions = await getChampionsById().catch(() => new Map<number, { id: string; name: string }>());
   const champName = (id: number) => champions.get(id)?.id ?? String(id);
 
-  for (const platform of platformsToTry()) {
+  for (const platform of platformsToTry(preferredPlatform)) {
     let game: CurrentGame;
     try {
       game = await riotFetch<CurrentGame>(
@@ -339,6 +345,7 @@ export async function getLiveGameByPuuid(puuid: string, friendName: string, frie
       length: elapsed,
       championName: me ? champName(me.championId) : "",
       teamId: me?.teamId ?? 100,
+      platform,
     };
   }
 

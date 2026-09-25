@@ -1,13 +1,30 @@
 import { NextResponse } from "next/server";
-import { listFriends } from "/lib/friends-store";
+import { listFriends, updateFriendSync } from "/lib/friends-store";
 import { listMatches, listMatchesForFriend } from "/lib/matches-store";
-import { getAccount, getLiveGameByPuuid, getRankedEntries, rankScore, splitRanks } from "/lib/riot";
+import {
+  getAccount,
+  getLiveGameByPuuid,
+  getRankedEntries,
+  rankScore,
+  riotKeyConfigured,
+  splitRanks,
+} from "/lib/riot";
 
 export const runtime = "nodejs";
 
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
   const matchLimit = Math.min(Number(searchParams.get("matchLimit") || 40) || 40, 100);
+
+  if (!riotKeyConfigured()) {
+    return NextResponse.json(
+      {
+        error:
+          "Falta RIOT_API_KEY real en .env.local. Sacá una Development Key en https://developer.riotgames.com y reemplazá RGAPI-REPLACE_ME.",
+      },
+      { status: 500 },
+    );
+  }
 
   let friends;
   try {
@@ -35,15 +52,27 @@ export async function GET(request: Request) {
         : await getAccount(friend.gameName, friend.tagLine);
 
       const [rankedResult, live, storedMatches] = await Promise.all([
-        getRankedEntries(account.puuid)
-          .then((ranked) => ({ ranked, rankError: null as string | null }))
+        getRankedEntries(account.puuid, friend.platform)
+          .then((r) => ({ ranked: r.entries, platform: r.platform, rankError: null as string | null }))
           .catch((error) => ({
-            ranked: [],
+            ranked: [] as Awaited<ReturnType<typeof getRankedEntries>>["entries"],
+            platform: friend.platform,
             rankError: error instanceof Error ? error.message : "RANK_ERROR",
           })),
-        getLiveGameByPuuid(account.puuid, account.gameName, account.tagLine).catch(() => null),
+        getLiveGameByPuuid(account.puuid, account.gameName, account.tagLine, friend.platform).catch(
+          () => null,
+        ),
         listMatchesForFriend(friend.id, 12),
       ]);
+
+      if (rankedResult.platform && rankedResult.platform !== friend.platform) {
+        await updateFriendSync(friend.id, {
+          puuid: account.puuid,
+          platform: rankedResult.platform,
+        }).catch(() => undefined);
+      } else if (!friend.puuid) {
+        await updateFriendSync(friend.id, { puuid: account.puuid }).catch(() => undefined);
+      }
 
       const { solo, flex } = splitRanks(rankedResult.ranked);
       const rank = solo ?? flex;
@@ -53,6 +82,7 @@ export async function GET(request: Request) {
         dbId: friend.id,
         name: account.gameName,
         tag: account.tagLine,
+        platform: rankedResult.platform || friend.platform,
         solo,
         flex,
         rank,

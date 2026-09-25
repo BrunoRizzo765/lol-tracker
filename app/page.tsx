@@ -167,7 +167,16 @@ export default function Home() {
 
         {error && (
           <div className="mb-6 rounded-xl border border-red-900 bg-red-950/40 p-4 text-red-300">
-            {error}. Revisá <code>RIOT_API_KEY</code>, <code>RIOT_REGION</code> y <code>DATABASE_URL</code>.
+            {error}
+            {error.includes("RIOT_API_KEY") && (
+              <p className="mt-2 text-sm text-red-200/80">
+                Abrí <code>.env.local</code>, poné tu key de{" "}
+                <a className="underline" href="https://developer.riotgames.com" target="_blank" rel="noreferrer">
+                  developer.riotgames.com
+                </a>{" "}
+                y reiniciá <code>pnpm dev</code>.
+              </p>
+            )}
           </div>
         )}
         {syncMsg && (

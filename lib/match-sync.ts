@@ -1,6 +1,6 @@
 import { listFriends, updateFriendSync, type StoredFriend } from "/lib/friends-store";
 import { existingMatchIds, upsertMatches, type MatchInput } from "/lib/matches-store";
-import { getAccount, getMatch, getMatchIds, participantFor } from "/lib/riot";
+import { getAccount, getMatch, getMatchIds, participantFor, resolvePlatform } from "/lib/riot";
 
 const DAY_SEC = 24 * 60 * 60;
 const WINDOW_DAYS = 5;
@@ -74,6 +74,9 @@ async function syncOneFriend(friend: StoredFriend, mode: SyncMode): Promise<Frie
 
   try {
     const account = await getAccount(friend.gameName, friend.tagLine);
+    const platform =
+      friend.platform ||
+      (await resolvePlatform(account.puuid, friend.platform).catch(() => null));
     const ids = await collectMatchIds(account.puuid, startSec, endSec);
     base.fetched = ids.length;
 
@@ -135,6 +138,7 @@ async function syncOneFriend(friend: StoredFriend, mode: SyncMode): Promise<Frie
 
     await updateFriendSync(friend.id, {
       puuid: account.puuid,
+      platform: platform || undefined,
       syncedNewest,
       syncedOldest,
     });
