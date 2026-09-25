@@ -1,7 +1,17 @@
+"use client";
+
+import { useState } from "react";
 import type { Friend } from "/lib/types";
 import { kdaColor, kdaLabel, rankLabel, TIER_COLORS } from "/lib/format";
 
-export function PlayerCard({ friend }: { friend: Friend }) {
+export function PlayerCard({
+  friend,
+  onRemoved,
+}: {
+  friend: Friend;
+  onRemoved?: () => void;
+}) {
+  const [removing, setRemoving] = useState(false);
   const matches = [...friend.matches].sort((a, b) => b.date - a.date);
   const games = matches.length;
   const wins = matches.filter((m) => m.win).length;
@@ -18,6 +28,21 @@ export function PlayerCard({ friend }: { friend: Friend }) {
   const form = matches.slice(0, 5);
   const tierColor = friend.rank ? TIER_COLORS[friend.rank.tier?.toUpperCase()] || "text-slate-300" : "text-slate-500";
 
+  async function remove() {
+    if (!friend.dbId || !confirm(`¿Quitar a ${friend.name}#${friend.tag}?`)) return;
+    setRemoving(true);
+    try {
+      const r = await fetch(`/api/friends/${friend.dbId}`, { method: "DELETE" });
+      const json = await r.json();
+      if (!r.ok) throw new Error(json.error || "Error");
+      onRemoved?.();
+    } catch (e) {
+      alert(e instanceof Error ? e.message : "No se pudo eliminar");
+    } finally {
+      setRemoving(false);
+    }
+  }
+
   return (
     <article className="flex flex-col gap-4 rounded-2xl border border-slate-800 bg-slate-900/60 p-5">
       <div className="flex items-start justify-between gap-3">
@@ -32,7 +57,20 @@ export function PlayerCard({ friend }: { friend: Friend }) {
           </p>
           <p className="truncate text-xs text-slate-500">#{friend.tag}</p>
         </div>
-        <span className="rounded-lg bg-slate-800/80 px-2.5 py-1 text-sm font-bold text-cyan-400">{winRate}%</span>
+        <div className="flex items-center gap-2">
+          <span className="rounded-lg bg-slate-800/80 px-2.5 py-1 text-sm font-bold text-cyan-400">{winRate}%</span>
+          {friend.dbId != null && (
+            <button
+              type="button"
+              onClick={remove}
+              disabled={removing}
+              title="Quitar amigo"
+              className="rounded-lg border border-slate-700 px-2 py-1 text-xs text-slate-500 hover:border-red-700 hover:text-red-300 disabled:opacity-50"
+            >
+              {removing ? "…" : "✕"}
+            </button>
+          )}
+        </div>
       </div>
 
       <div className="rounded-xl border border-slate-800 bg-slate-950/40 px-3 py-2.5">

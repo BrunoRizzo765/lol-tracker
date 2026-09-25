@@ -1,0 +1,15 @@
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: lol
+      POSTGRES_PASSWORD: lol
+      POSTGRES_DB: lol_tracker
+    ports:
+      - "5432:5432"
+    volumes:
+      - lol_pg_data:/var/lib/postgresql/data
+
+volumes:
+  lol_pg_data:

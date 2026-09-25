@@ -1,4 +1,4 @@
-import { pool } from "/lib/db";
+import { ensureSchema, pool } from "/lib/db";
 import { parseFriends } from "/lib/riot";
 
 export type StoredFriend = { id: number; gameName: string; tagLine: string };
@@ -7,6 +7,7 @@ type Row = { id: number; game_name: string; tag_line: string };
 const toFriend = (r: Row): StoredFriend => ({ id: r.id, gameName: r.game_name, tagLine: r.tag_line });
 
 async function selectAll() {
+  await ensureSchema();
   const { rows } = await pool.query<Row>(
     "SELECT id, game_name, tag_line FROM friends ORDER BY created_at ASC, id ASC",
   );
@@ -33,6 +34,7 @@ export async function listFriends(): Promise<StoredFriend[]> {
 }
 
 export async function addFriend(gameName: string, tagLine: string): Promise<StoredFriend> {
+  await ensureSchema();
   const { rows } = await pool.query<Row>(
     `INSERT INTO friends (game_name, tag_line) VALUES ($1, $2)
      ON CONFLICT (game_name, tag_line) DO UPDATE SET game_name = EXCLUDED.game_name
@@ -43,5 +45,16 @@ export async function addFriend(gameName: string, tagLine: string): Promise<Stor
 }
 
 export async function removeFriend(id: number): Promise<void> {
+  await ensureSchema();
   await pool.query("DELETE FROM friends WHERE id = $1", [id]);
+}
+
+export function parseRiotId(raw: string): { gameName: string; tagLine: string } | null {
+  const value = raw.trim();
+  const idx = value.lastIndexOf("#");
+  if (idx <= 0 || idx === value.length - 1) return null;
+  const gameName = value.slice(0, idx).trim();
+  const tagLine = value.slice(idx + 1).trim();
+  if (!gameName || !tagLine) return null;
+  return { gameName, tagLine };
 }

@@ -1,11 +1,27 @@
 import { NextResponse } from "next/server";
-import { getFriendMatches, parseFriends, participantFor, pickSoloQueue, rankScore } from "/lib/riot";
+import { listFriends } from "/lib/friends-store";
+import { getFriendMatches, participantFor, pickSoloQueue, rankScore } from "/lib/riot";
 
 export const runtime = "nodejs";
 
 export async function GET() {
-  const friends = parseFriends();
-  if (!friends.length) return NextResponse.json({ error: "No friends configured." }, { status: 400 });
+  let friends;
+  try {
+    friends = await listFriends();
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "DB_ERROR";
+    return NextResponse.json(
+      { error: message === "Missing DATABASE_URL" ? "Configurá DATABASE_URL (Postgres)." : message },
+      { status: 500 },
+    );
+  }
+
+  if (!friends.length) {
+    return NextResponse.json(
+      { error: "No hay amigos. Agregá uno desde la UI o configurá FRIENDS en .env." },
+      { status: 400 },
+    );
+  }
 
   const result = [];
   for (const friend of friends) {
@@ -14,6 +30,7 @@ export async function GET() {
       const solo = pickSoloQueue(ranked);
       result.push({
         id: account.puuid,
+        dbId: friend.id,
         name: account.gameName,
         tag: account.tagLine,
         rank: solo
@@ -28,28 +45,40 @@ export async function GET() {
               hotStreak: solo.hotStreak,
             }
           : null,
-        matches: matches.map((match) => {
-          const p = participantFor(match, account.puuid);
-          return p ? {
-            id: match.metadata.matchId,
-            date: match.info.gameCreation,
-            duration: match.info.gameDuration,
-            queueId: match.info.queueId,
-            mode: match.info.gameMode,
-            champion: p.championName,
-            kills: p.kills,
-            deaths: p.deaths,
-            assists: p.assists,
-            win: p.win,
-            cs: p.totalMinionsKilled + p.neutralMinionsKilled,
-            level: p.champLevel,
-            gold: p.goldEarned,
-          } : null;
-        }).filter(Boolean),
+        matches: matches
+          .map((match) => {
+            const p = participantFor(match, account.puuid);
+            return p
+              ? {
+                  id: match.metadata.matchId,
+                  date: match.info.gameCreation,
+                  duration: match.info.gameDuration,
+                  queueId: match.info.queueId,
+                  mode: match.info.gameMode,
+                  champion: p.championName,
+                  kills: p.kills,
+                  deaths: p.deaths,
+                  assists: p.assists,
+                  win: p.win,
+                  cs: p.totalMinionsKilled + p.neutralMinionsKilled,
+                  level: p.champLevel,
+                  gold: p.goldEarned,
+                }
+              : null;
+          })
+          .filter(Boolean),
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : "UNKNOWN_ERROR";
-      result.push({ id: `${friend.gameName}#${friend.tagLine}`, name: friend.gameName, tag: friend.tagLine, rank: null, matches: [], error: message });
+      result.push({
+        id: `${friend.gameName}#${friend.tagLine}`,
+        dbId: friend.id,
+        name: friend.gameName,
+        tag: friend.tagLine,
+        rank: null,
+        matches: [],
+        error: message,
+      });
     }
   }
 
@@ -65,15 +94,27 @@ export async function GET() {
     .sort((a, b) => b.score - a.score);
 
   const allMatches = result.flatMap((friend) => friend.matches.map((match) => ({ ...match, friend: friend.name })));
-  const valid = allMatches.filter(Boolean) as Array<NonNullable<(typeof result)[number]["matches"][number]> & { friend: string }>;
-  const stats = result.map((friend) => {
-    const ms = friend.matches.filter(Boolean) as NonNullable<(typeof friend.matches)[number]>[];
-    const wins = ms.filter((m) => m.win).length;
-    const kills = ms.reduce((sum, m) => sum + m.kills, 0);
-    const deaths = ms.reduce((sum, m) => sum + m.deaths, 0);
-    const assists = ms.reduce((sum, m) => sum + m.assists, 0);
-    return { name: friend.name, tag: friend.tag, games: ms.length, wins, losses: ms.length - wins, winRate: ms.length ? Math.round((wins / ms.length) * 100) : 0, kda: deaths ? Number(((kills + assists) / deaths).toFixed(2)) : kills + assists };
-  }).sort((a, b) => b.winRate - a.winRate || b.kda - a.kda);
+  const valid = allMatches.filter(Boolean) as Array<
+    NonNullable<(typeof result)[number]["matches"][number]> & { friend: string }
+  >;
+  const stats = result
+    .map((friend) => {
+      const ms = friend.matches.filter(Boolean) as NonNullable<(typeof friend.matches)[number]>[];
+      const wins = ms.filter((m) => m.win).length;
+      const kills = ms.reduce((sum, m) => sum + m.kills, 0);
+      const deaths = ms.reduce((sum, m) => sum + m.deaths, 0);
+      const assists = ms.reduce((sum, m) => sum + m.assists, 0);
+      return {
+        name: friend.name,
+        tag: friend.tag,
+        games: ms.length,
+        wins,
+        losses: ms.length - wins,
+        winRate: ms.length ? Math.round((wins / ms.length) * 100) : 0,
+        kda: deaths ? Number(((kills + assists) / deaths).toFixed(2)) : kills + assists,
+      };
+    })
+    .sort((a, b) => b.winRate - a.winRate || b.kda - a.kda);
 
   valid.sort((a, b) => b.date - a.date);
   return NextResponse.json({ friends: result, recent: valid.slice(0, 30), ranking: stats, ladder });

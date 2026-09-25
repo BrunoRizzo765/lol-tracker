@@ -6,6 +6,8 @@ import { rankLabel, TIER_COLORS, queueLabel, timeAgo } from "/lib/format";
 import { MatchCard } from "/components/match-card";
 import { PlayerCard } from "/components/player-card";
 import { ChampionPool } from "/components/champion-pool";
+import { AddFriendForm } from "/components/add-friend-form";
+import { MatchDetailModal } from "/components/match-detail-modal";
 
 type ResultFilter = "Todos" | "Victorias" | "Derrotas";
 
@@ -16,6 +18,7 @@ export default function Home() {
   const [filter, setFilter] = useState("Todos");
   const [result, setResult] = useState<ResultFilter>("Todos");
   const [updatedAt, setUpdatedAt] = useState<number | null>(null);
+  const [selectedMatch, setSelectedMatch] = useState<string | null>(null);
 
   async function load() {
     setLoading(true);
@@ -74,9 +77,13 @@ export default function Home() {
           </div>
         </header>
 
+        <section className="mb-8">
+          <AddFriendForm onAdded={load} />
+        </section>
+
         {error && (
           <div className="mb-6 rounded-xl border border-red-900 bg-red-950/40 p-4 text-red-300">
-            {error}. Revisá <code>RIOT_API_KEY</code> y <code>FRIENDS</code>.
+            {error}. Revisá <code>RIOT_API_KEY</code> y <code>DATABASE_URL</code>.
           </div>
         )}
         {loading && !data && (
@@ -146,7 +153,7 @@ export default function Home() {
               <h2 className="mb-4 text-lg font-bold">Perfiles</h2>
               <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
                 {data.friends.map((f) => (
-                  <PlayerCard key={f.id} friend={f} />
+                  <PlayerCard key={f.id} friend={f} onRemoved={load} />
                 ))}
               </div>
             </section>
@@ -186,7 +193,9 @@ export default function Home() {
               </div>
               <div className="grid gap-3">
                 {matches.length ? (
-                  matches.map((m) => <MatchCard key={`${m.id}-${m.friend}`} m={m} />)
+                  matches.map((m) => (
+                    <MatchCard key={`${m.id}-${m.friend}`} m={m} onOpen={setSelectedMatch} />
+                  ))
                 ) : (
                   <p className="rounded-2xl border border-slate-800 bg-slate-900/40 p-8 text-center text-slate-500">
                     No hay partidas con estos filtros.
@@ -202,6 +211,8 @@ export default function Home() {
           Games, Inc.
         </footer>
       </div>
+
+      {selectedMatch && <MatchDetailModal matchId={selectedMatch} onClose={() => setSelectedMatch(null)} />}
     </main>
   );
 }

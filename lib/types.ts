@@ -28,11 +28,48 @@ export type Rank = {
 
 export type Friend = {
   id: string;
+  dbId?: number;
   name: string;
   tag: string;
   rank: Rank | null;
   matches: Match[];
   error?: string;
+};
+
+export type MatchDetailParticipant = {
+  puuid: string;
+  name: string;
+  tag: string;
+  champion: string;
+  teamId: number;
+  kills: number;
+  deaths: number;
+  assists: number;
+  cs: number;
+  gold: number;
+  level: number;
+  win: boolean;
+  items: number[];
+};
+
+export type MatchDetailTeam = {
+  teamId: number;
+  win: boolean;
+  kills: number;
+  deaths: number;
+  assists: number;
+  gold: number;
+  participants: MatchDetailParticipant[];
+};
+
+export type MatchDetail = {
+  id: string;
+  date: number;
+  duration: number;
+  queueId: number;
+  mode: string;
+  teams: MatchDetailTeam[];
+  ddragonVersion?: string | null;
 };
 
 export type LadderEntry = { name: string; tag: string; rank: Rank | null; score: number };
