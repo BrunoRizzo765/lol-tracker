@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
-import { addFriend, listFriends, parseRiotId } from "/lib/friends-store";
-import { getAccount } from "/lib/riot";
+import { addFriend, listFriends, parseRiotId, updateFriendSync } from "/lib/friends-store";
+import { getAccount, resolvePlatform } from "/lib/riot";
 
 export const runtime = "nodejs";
 
@@ -42,7 +42,12 @@ export async function POST(request: Request) {
     }
 
     const friend = await addFriend(account.gameName, account.tagLine);
-    return NextResponse.json({ friend }, { status: 201 });
+
+    // Find the friend's server (any region) right away so sync and live lookups hit the right shard.
+    const platform = await resolvePlatform(account.puuid).catch(() => null);
+    await updateFriendSync(friend.id, { puuid: account.puuid, platform: platform ?? undefined }).catch(() => undefined);
+
+    return NextResponse.json({ friend: { ...friend, puuid: account.puuid, platform } }, { status: 201 });
   } catch (error) {
     const message = error instanceof Error ? error.message : "DB_ERROR";
     return NextResponse.json({ error: message }, { status: 500 });

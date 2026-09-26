@@ -36,11 +36,11 @@ function rng(seed: number) {
 }
 
 const DEMO_FRIENDS = [
-  { name: "Panchito", tag: "LAS", tier: "DIAMOND", division: "II", lp: 47, wins: 112, losses: 91, flexTier: "EMERALD", flexDiv: "I", flexLp: 12 },
-  { name: "Brunardo", tag: "BRU", tier: "EMERALD", division: "III", lp: 81, wins: 96, losses: 88, flexTier: "PLATINUM", flexDiv: "II", flexLp: 55 },
-  { name: "Tomii", tag: "0001", tier: "PLATINUM", division: "I", lp: 23, wins: 64, losses: 60, flexTier: null, flexDiv: null, flexLp: 0 },
-  { name: "Lucho", tag: "LAS", tier: "GOLD", division: "IV", lp: 66, wins: 41, losses: 45, flexTier: "GOLD", flexDiv: "II", flexLp: 30 },
-  { name: "Feca", tag: "GG", tier: "MASTER", division: "I", lp: 214, wins: 203, losses: 170, flexTier: "DIAMOND", flexDiv: "IV", flexLp: 9 },
+  { name: "Panchito", tag: "LAS", platform: "la2", tier: "DIAMOND", division: "II", lp: 47, wins: 112, losses: 91, flexTier: "EMERALD", flexDiv: "I", flexLp: 12 },
+  { name: "Brunardo", tag: "BRU", platform: "la2", tier: "EMERALD", division: "III", lp: 81, wins: 96, losses: 88, flexTier: "PLATINUM", flexDiv: "II", flexLp: 55 },
+  { name: "Tomii", tag: "0001", platform: "la2", tier: "PLATINUM", division: "I", lp: 23, wins: 64, losses: 60, flexTier: null, flexDiv: null, flexLp: 0 },
+  { name: "Lucho", tag: "EUW", platform: "euw1", tier: "GOLD", division: "IV", lp: 66, wins: 41, losses: 45, flexTier: "GOLD", flexDiv: "II", flexLp: 30 },
+  { name: "Feca", tag: "GG", platform: "la2", tier: "MASTER", division: "I", lp: 214, wins: 203, losses: 170, flexTier: "DIAMOND", flexDiv: "IV", flexLp: 9 },
 ];
 
 function makeRank(queue: string, tier: string | null, division: string | null, lp: number, wins: number, losses: number): Rank | null {
@@ -128,6 +128,7 @@ export function demoDashboard(reason: string, version: string | null): Dashboard
       dbId: undefined,
       name: f.name,
       tag: f.tag,
+      platform: f.platform,
       solo: makeRank("RANKED_SOLO_5x5", f.tier, f.division, f.lp, f.wins, f.losses),
       flex: makeRank("RANKED_FLEX_SR", f.flexTier, f.flexDiv, f.flexLp, Math.round(f.wins * 0.4), Math.round(f.losses * 0.4)),
       rank: null,

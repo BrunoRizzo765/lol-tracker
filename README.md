@@ -18,7 +18,7 @@ docker compose up -d
 
 4. En `.env.local` dejá `DATABASE_URL=postgresql://lol:lol@localhost:5432/lol_tracker` (o la URL de Neon/Supabase).
 5. Opcional: `FRIENDS=Name#TAG,...` seedea la tabla la primera vez que esté vacía.
-6. Para amigos de LAS: `RIOT_REGION=la1` y `RIOT_REGIONAL=americas`. Si mezclás LAN/BR/NA, el tracker prueba esas plataformas automáticamente.
+6. `RIOT_REGION` / `RIOT_REGIONAL` son solo el servidor por defecto (LAS es `la2`, LAN es `la1`). Podés mezclar amigos de cualquier región (LAS, EUW, KR, etc.): al agregarlos el tracker detecta su servidor y lo guarda; rangos, partidas y live se consultan en la región correcta de cada uno.
 7. Ejecutá `pnpm install` (o `npm install`) y después `pnpm dev`.
 
 ## Historial de partidas

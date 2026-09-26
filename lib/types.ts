@@ -69,6 +69,8 @@ export type Friend = {
   dbId?: number;
   name: string;
   tag: string;
+  /** Platform shard (la1, euw1, kr…). Null until resolved. */
+  platform?: string | null;
   solo: Rank | null;
   flex: Rank | null;
   /** Prefer Solo, else Flex — used for ladder sorting. */

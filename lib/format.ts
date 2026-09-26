@@ -5,6 +5,19 @@ export const queueName = (id: number) =>
 
 export const isRankedQueue = (id: number) => id === 420 || id === 440;
 
+/** Short label for a platform shard, e.g. "euw1" → "EUW". */
+export const platformLabel = (platform?: string | null) =>
+  platform
+    ? (
+        ({
+          la1: "LAN", la2: "LAS", br1: "BR", na1: "NA",
+          euw1: "EUW", eun1: "EUNE", tr1: "TR", ru: "RU", me1: "ME",
+          kr: "KR", jp1: "JP",
+          oc1: "OCE", sg2: "SEA", tw2: "TW", vn2: "VN",
+        }) as Record<string, string>
+      )[platform.toLowerCase()] || platform.toUpperCase()
+    : "";
+
 /** Tailwind text classes per tier. */
 export const TIER_COLORS: Record<string, string> = {
   CHALLENGER: "text-amber-300",

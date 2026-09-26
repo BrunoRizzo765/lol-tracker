@@ -1,6 +1,36 @@
 const API_KEY = process.env.RIOT_API_KEY;
+/** Default platform/regional, used only until a friend's real shard is known. */
 const PLATFORM = process.env.RIOT_REGION || "la1";
 const REGIONAL = process.env.RIOT_REGIONAL || "americas";
+
+/** Platform shards grouped by the regional routing value that serves their match-v5 data. */
+const PLATFORM_GROUPS: Record<string, string[]> = {
+  americas: ["la1", "la2", "br1", "na1"],
+  europe: ["euw1", "eun1", "tr1", "ru", "me1"],
+  asia: ["kr", "jp1"],
+  sea: ["oc1", "sg2", "tw2", "vn2"],
+};
+
+const ALL_PLATFORMS = Object.values(PLATFORM_GROUPS).flat();
+
+/** Regional routing value (americas / europe / asia / sea) for a platform shard. */
+export function regionalFor(platform?: string | null): string {
+  const p = (platform || "").toLowerCase();
+  for (const [regional, list] of Object.entries(PLATFORM_GROUPS)) {
+    if (list.includes(p)) return regional;
+  }
+  return REGIONAL;
+}
+
+/** Match IDs are prefixed with their platform ("EUW1_123…"), so the regional can be derived. */
+export function regionalForMatchId(matchId: string): string {
+  const idx = matchId.indexOf("_");
+  return regionalFor(idx > 0 ? matchId.slice(0, idx) : null);
+}
+
+export function isKnownPlatform(platform?: string | null) {
+  return Boolean(platform && ALL_PLATFORMS.includes(platform.toLowerCase()));
+}
 
 export function riotKeyConfigured() {
   return Boolean(API_KEY && API_KEY !== "RGAPI-REPLACE_ME" && API_KEY.startsWith("RGAPI-"));
@@ -84,6 +114,7 @@ export async function getAccount(gameName: string, tagLine: string) {
 export async function getMatchIds(
   puuid: string,
   opts: { count?: number; start?: number; startTime?: number; endTime?: number } = {},
+  regional: string = REGIONAL,
 ) {
   const count = Math.min(Math.max(opts.count ?? 10, 1), 100);
   const start = Math.max(opts.start ?? 0, 0);
@@ -96,7 +127,7 @@ export async function getMatchIds(
   if (opts.endTime != null) params.set("endTime", String(Math.floor(opts.endTime)));
 
   return riotFetch<MatchList>(
-    `https://${REGIONAL}.api.riotgames.com`,
+    `https://${regional}.api.riotgames.com`,
     `/lol/match/v5/matches/by-puuid/${encodeURIComponent(puuid)}/ids?${params}`,
     0,
   );
@@ -104,7 +135,7 @@ export async function getMatchIds(
 
 export async function getMatch(matchId: string) {
   return riotFetch<Match>(
-    `https://${REGIONAL}.api.riotgames.com`,
+    `https://${regionalForMatchId(matchId)}.api.riotgames.com`,
     `/lol/match/v5/matches/${encodeURIComponent(matchId)}`,
     3600,
   );
@@ -112,21 +143,16 @@ export async function getMatch(matchId: string) {
 
 type Summoner = { id?: string; puuid: string; profileIconId: number; summonerLevel: number };
 
-/** Platforms that share the americas / europe / asia match routing. */
-const PLATFORM_FALLBACKS: Record<string, string[]> = {
-  americas: ["la1", "la2", "br1", "na1"],
-  europe: ["euw1", "eun1", "tr1", "ru"],
-  asia: ["kr", "jp1"],
-  sea: ["oc1", "sg2", "tw2", "vn2"],
-};
-
+/**
+ * Order in which to probe shards for a PUUID: the preferred/default one first,
+ * then the rest of its regional group, then every other region. Friends from
+ * any region (LAS, EUW, KR…) can therefore be tracked with one API key.
+ */
 function platformsToTry(preferred?: string | null): string[] {
-  const primary = preferred || PLATFORM;
-  const group =
-    PLATFORM_FALLBACKS[REGIONAL] ||
-    Object.values(PLATFORM_FALLBACKS).find((list) => list.includes(primary)) ||
-    [];
-  return [primary, ...group.filter((p) => p !== primary)];
+  const primary = (preferred || PLATFORM).toLowerCase();
+  const group = PLATFORM_GROUPS[regionalFor(primary)] || [];
+  const seen = new Set<string>();
+  return [primary, ...group, ...ALL_PLATFORMS].filter((p) => (seen.has(p) ? false : (seen.add(p), true)));
 }
 
 /**
@@ -204,16 +230,14 @@ export function splitRanks(entries: LeagueEntry[] | undefined) {
 
 export async function getFriendMatches(gameName: string, tagLine: string, count = 8) {
   const account = await getAccount(gameName, tagLine);
-  const [ids, rankedResult] = await Promise.all([
-    getMatchIds(account.puuid, { count }),
-    getRankedEntries(account.puuid)
-      .then((r) => ({ ranked: r.entries, platform: r.platform, rankError: null as string | null }))
-      .catch((error) => ({
-        ranked: [] as LeagueEntry[],
-        platform: null as string | null,
-        rankError: error instanceof Error ? error.message : "RANK_ERROR",
-      })),
-  ]);
+  const rankedResult = await getRankedEntries(account.puuid)
+    .then((r) => ({ ranked: r.entries, platform: r.platform, rankError: null as string | null }))
+    .catch((error) => ({
+      ranked: [] as LeagueEntry[],
+      platform: null as string | null,
+      rankError: error instanceof Error ? error.message : "RANK_ERROR",
+    }));
+  const ids = await getMatchIds(account.puuid, { count }, regionalFor(rankedResult.platform));
   const matches = await Promise.all(ids.map((id) => getMatch(id)));
   return {
     account,
@@ -347,7 +371,13 @@ export async function getLiveGameByPuuid(
 
   const tracked = new Set([puuid, ...friendPuids]);
 
-  for (const platform of platformsToTry(preferredPlatform)) {
+  // Once the friend's shard is known, only ask that one (a 404 there means "not in game").
+  // Probing every region on each refresh would burn the rate limit.
+  const candidates = isKnownPlatform(preferredPlatform)
+    ? [preferredPlatform!.toLowerCase()]
+    : PLATFORM_GROUPS[regionalFor(PLATFORM)] || [PLATFORM];
+
+  for (const platform of candidates) {
     let game: CurrentGame;
     try {
       game = await riotFetch<CurrentGame>(

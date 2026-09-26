@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { Crown, Trash2 } from "lucide-react";
 import type { Friend } from "/lib/types";
-import { TIER_HEX, timeAgo } from "/lib/format";
+import { platformLabel, TIER_HEX, timeAgo } from "/lib/format";
 import { RankBadge } from "/components/rank-badge";
 import { ChampAvatar, Meter, cx } from "/components/ui";
 
@@ -72,9 +72,16 @@ export function PlayerCard({
           {/* Name + status */}
           <div className="flex items-start justify-between gap-2">
             <div className="min-w-0">
-              <p className="truncate font-display text-base font-semibold tracking-tight">
-                {friend.name}
-                <span className="text-fg-dim">#{friend.tag}</span>
+              <p className="flex items-center gap-2 font-display text-base font-semibold tracking-tight">
+                <span className="truncate">
+                  {friend.name}
+                  <span className="text-fg-dim">#{friend.tag}</span>
+                </span>
+                {friend.platform && (
+                  <span className="shrink-0 rounded-md border border-white/10 bg-ink-800 px-1.5 py-0.5 font-sans text-[10px] font-bold uppercase tracking-wider text-fg-muted">
+                    {platformLabel(friend.platform)}
+                  </span>
+                )}
               </p>
               {friend.live ? (
                 <p className="mt-0.5 text-xs font-semibold text-live">

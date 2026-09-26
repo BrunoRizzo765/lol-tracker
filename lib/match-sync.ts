@@ -1,6 +1,6 @@
 import { listFriends, updateFriendSync, type StoredFriend } from "/lib/friends-store";
 import { existingMatchIds, upsertMatches, type MatchInput } from "/lib/matches-store";
-import { getAccount, getMatch, getMatchIds, participantFor, resolvePlatform } from "/lib/riot";
+import { getAccount, getMatch, getMatchIds, participantFor, regionalFor, resolvePlatform } from "/lib/riot";
 
 /** Safety caps so one sync doesn't blow rate limits forever. */
 const MAX_IDS_PER_FRIEND = 1000;
@@ -18,17 +18,22 @@ export type FriendSyncResult = {
 
 async function collectMatchIds(
   puuid: string,
+  regional: string,
   opts: { startTime?: number; endTime?: number } = {},
 ): Promise<string[]> {
   const ids: string[] = [];
   let start = 0;
   while (ids.length < MAX_IDS_PER_FRIEND) {
-    const batch = await getMatchIds(puuid, {
-      start,
-      count: 100,
-      startTime: opts.startTime,
-      endTime: opts.endTime,
-    });
+    const batch = await getMatchIds(
+      puuid,
+      {
+        start,
+        count: 100,
+        startTime: opts.startTime,
+        endTime: opts.endTime,
+      },
+      regional,
+    );
     if (!batch.length) break;
     ids.push(...batch);
     if (batch.length < 100) break;
@@ -53,13 +58,15 @@ async function syncOneFriend(friend: StoredFriend): Promise<FriendSyncResult> {
 
   try {
     const account = await getAccount(friend.gameName, friend.tagLine);
+    // The friend's shard decides which regional route (americas/europe/asia/sea) holds their matches.
     const platform =
       friend.platform ||
       (await resolvePlatform(account.puuid, friend.platform).catch(() => null));
+    const regional = regionalFor(platform);
 
     const ids = isFirst
-      ? await collectMatchIds(account.puuid)
-      : await collectMatchIds(account.puuid, {
+      ? await collectMatchIds(account.puuid, regional)
+      : await collectMatchIds(account.puuid, regional, {
           // Slight overlap so we don't miss games around the cursor.
           startTime: Math.floor(friend.syncedNewest! / 1000) - 3600,
           endTime: nowSec,
