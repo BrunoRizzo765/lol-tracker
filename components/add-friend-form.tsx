@@ -1,8 +1,18 @@
 "use client";
 
 import { useState, type FormEvent } from "react";
+import { UserPlus } from "lucide-react";
+import { Button } from "/components/ui";
 
-export function AddFriendForm({ onAdded }: { onAdded: () => void }) {
+export function AddFriendForm({
+  onAdded,
+  disabled,
+  disabledHint,
+}: {
+  onAdded: () => void;
+  disabled?: boolean;
+  disabledHint?: string;
+}) {
   const [riotId, setRiotId] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -10,6 +20,7 @@ export function AddFriendForm({ onAdded }: { onAdded: () => void }) {
 
   async function submit(e: FormEvent) {
     e.preventDefault();
+    if (disabled) return;
     setBusy(true);
     setError("");
     setOk("");
@@ -32,27 +43,28 @@ export function AddFriendForm({ onAdded }: { onAdded: () => void }) {
   }
 
   return (
-    <form onSubmit={submit} className="rounded-2xl border border-slate-800 bg-slate-900/60 p-5">
-      <h2 className="text-lg font-bold">Agregar amigo</h2>
-      <p className="mt-1 text-sm text-slate-500">Riot ID completo, por ejemplo <code className="text-slate-400">Nombre#TAG</code>.</p>
-      <div className="mt-4 flex flex-col gap-3 sm:flex-row">
+    <form onSubmit={submit} className="px-5 py-4">
+      <label htmlFor="riot-id" className="mb-2 block text-[11px] font-semibold uppercase tracking-wider text-fg-dim">
+        Agregar amigo
+      </label>
+      <div className="flex gap-2">
         <input
+          id="riot-id"
           value={riotId}
           onChange={(e) => setRiotId(e.target.value)}
           placeholder="GameName#TAG"
           required
-          className="min-w-0 flex-1 rounded-xl border border-slate-700 bg-slate-950 px-4 py-3 text-sm outline-none placeholder:text-slate-600 focus:border-cyan-500"
+          disabled={disabled}
+          autoComplete="off"
+          className="focus-ring h-10 min-w-0 flex-1 rounded-xl border border-ink-600/80 bg-ink-950/70 px-3.5 text-sm text-fg outline-none transition-colors placeholder:text-fg-dim focus:border-gold-500/60 disabled:opacity-50"
         />
-        <button
-          type="submit"
-          disabled={busy || !riotId.trim()}
-          className="rounded-xl bg-cyan-400 px-5 py-3 text-sm font-bold text-slate-950 hover:bg-cyan-300 disabled:opacity-50"
-        >
-          {busy ? "Validando…" : "Agregar"}
-        </button>
+        <Button type="submit" variant="primary" loading={busy} disabled={disabled || !riotId.trim()} icon={<UserPlus size={16} />}>
+          Agregar
+        </Button>
       </div>
-      {error && <p className="mt-3 text-sm text-red-300">{error}</p>}
-      {ok && <p className="mt-3 text-sm text-cyan-300">{ok}</p>}
+      {disabled && disabledHint && <p className="mt-2 text-xs text-fg-dim">{disabledHint}</p>}
+      {error && <p className="mt-2 text-xs text-loss">{error}</p>}
+      {ok && <p className="mt-2 text-xs text-win">{ok}</p>}
     </form>
   );
 }

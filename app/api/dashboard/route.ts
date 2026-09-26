@@ -3,12 +3,14 @@ import { listFriends, updateFriendSync } from "/lib/friends-store";
 import { listMatches, listMatchesForFriend } from "/lib/matches-store";
 import {
   getAccount,
+  getDDragonVersion,
   getLiveGameByPuuid,
   getRankedEntries,
   rankScore,
   riotKeyConfigured,
   splitRanks,
 } from "/lib/riot";
+import { demoDashboard } from "/lib/demo";
 import type { LiveGame } from "/lib/types";
 
 export const runtime = "nodejs";
@@ -17,13 +19,16 @@ export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
   const matchLimit = Math.min(Number(searchParams.get("matchLimit") || 40) || 40, 100);
 
-  if (!riotKeyConfigured()) {
+  // Sin configuración → datos de ejemplo para poder ver la UI igual.
+  const missing = [
+    !riotKeyConfigured() && "RIOT_API_KEY",
+    !process.env.DATABASE_URL && "DATABASE_URL",
+  ].filter(Boolean) as string[];
+  if (missing.length) {
+    const version = await getDDragonVersion().catch(() => null);
     return NextResponse.json(
-      {
-        error:
-          "Falta RIOT_API_KEY real en .env.local. Sacá una Development Key en https://developer.riotgames.com y reemplazá RGAPI-REPLACE_ME.",
-      },
-      { status: 500 },
+      demoDashboard(`Falta ${missing.join(" y ")} en .env.local`, version),
+      { headers: { "Cache-Control": "no-store" } },
     );
   }
 
@@ -184,7 +189,10 @@ export async function GET(request: Request) {
     }
   }
 
-  const { matches: recent, total: matchTotal } = await listMatches({ limit: matchLimit });
+  const [{ matches: recent, total: matchTotal }, ddragonVersion] = await Promise.all([
+    listMatches({ limit: matchLimit }),
+    getDDragonVersion().catch(() => null),
+  ]);
 
   return NextResponse.json({
     friends: result,
@@ -193,5 +201,7 @@ export async function GET(request: Request) {
     hasMoreMatches: recent.length < matchTotal,
     live: [...liveByGame.values()],
     ladder,
+    ddragonVersion,
+    demo: null,
   });
 }

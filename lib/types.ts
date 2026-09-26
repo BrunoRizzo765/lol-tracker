@@ -136,4 +136,8 @@ export type Dashboard = {
   hasMoreMatches: boolean;
   live: LiveGame[];
   ladder: LadderEntry[];
+  /** Data Dragon version used for champion/item icons on the client. */
+  ddragonVersion?: string | null;
+  /** Present when the server is serving sample data because config is missing. */
+  demo?: { reason: string } | null;
 };

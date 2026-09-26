@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { getDDragonVersion, getMatchDetail } from "/lib/riot";
+import { DEMO_PREFIX, demoMatchDetail } from "/lib/demo";
 
 export const runtime = "nodejs";
 
@@ -7,6 +8,11 @@ export async function GET(_request: Request, context: { params: Promise<{ id: st
   try {
     const { id } = await context.params;
     if (!id) return NextResponse.json({ error: "Falta match id." }, { status: 400 });
+
+    if (id.startsWith(DEMO_PREFIX)) {
+      const version = await getDDragonVersion().catch(() => null);
+      return NextResponse.json(demoMatchDetail(id, version));
+    }
 
     const [detail, version] = await Promise.all([
       getMatchDetail(id),

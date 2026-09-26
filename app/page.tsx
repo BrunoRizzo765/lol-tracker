@@ -1,16 +1,20 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { AlertTriangle, Radio, Trophy } from "lucide-react";
 import type { Dashboard, Match } from "/lib/types";
-import { timeAgo } from "/lib/format";
-import { MatchCard } from "/components/match-card";
-import { PlayerCard } from "/components/player-card";
 import { AddFriendForm } from "/components/add-friend-form";
-import { MatchDetailModal } from "/components/match-detail-modal";
+import { ChampionPool } from "/components/champion-pool";
 import { LiveGameCard } from "/components/live-game-card";
-import { RankBadge } from "/components/rank-badge";
+import { MatchDetailModal } from "/components/match-detail-modal";
+import { MatchHistory } from "/components/match-history";
+import { PlayerCard } from "/components/player-card";
+import { StatsStrip } from "/components/stats-strip";
+import { Toasts, type Toast } from "/components/toast";
+import { TopBar } from "/components/top-bar";
+import { Card, CardHeader, EmptyState, Skeleton } from "/components/ui";
 
-type ResultFilter = "Todos" | "Victorias" | "Derrotas";
+const LIVE_REFRESH_MS = 60_000;
 
 export default function Home() {
   const [data, setData] = useState<Dashboard | null>(null);
@@ -18,16 +22,21 @@ export default function Home() {
   const [syncing, setSyncing] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState("");
-  const [syncMsg, setSyncMsg] = useState("");
-  const [filter, setFilter] = useState("Todos");
-  const [result, setResult] = useState<ResultFilter>("Todos");
   const [updatedAt, setUpdatedAt] = useState<number | null>(null);
   const [selectedMatch, setSelectedMatch] = useState<string | null>(null);
   const [extraMatches, setExtraMatches] = useState<Match[]>([]);
   const [hasMoreDb, setHasMoreDb] = useState(false);
+  const [toasts, setToasts] = useState<Toast[]>([]);
+  const toastId = useRef(0);
 
-  async function load() {
-    setLoading(true);
+  const pushToast = useCallback((tone: Toast["tone"], text: string) => {
+    const id = ++toastId.current;
+    setToasts((t) => [...t, { id, tone, text }]);
+    setTimeout(() => setToasts((t) => t.filter((x) => x.id !== id)), 6000);
+  }, []);
+
+  const load = useCallback(async (silent = false) => {
+    if (!silent) setLoading(true);
     setError("");
     try {
       const r = await fetch("/api/dashboard?matchLimit=40", { cache: "no-store" });
@@ -42,13 +51,12 @@ export default function Home() {
       setError(e instanceof Error ? e.message : "Error cargando datos");
       return null;
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
-  }
+  }, []);
 
-  async function sync() {
+  const sync = useCallback(async () => {
     setSyncing(true);
-    setSyncMsg("");
     setError("");
     try {
       const r = await fetch("/api/matches/sync", { method: "POST" });
@@ -58,14 +66,14 @@ export default function Home() {
         json.full > 0
           ? `carga completa para ${json.full} amigo${json.full === 1 ? "" : "s"}`
           : "solo partidas nuevas";
-      setSyncMsg(`Listo (${hint}): ${json.inserted} nuevas de ${json.fetched} encontradas.`);
+      pushToast("success", `Listo (${hint}): ${json.inserted} nuevas de ${json.fetched} encontradas.`);
       await load();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Error sincronizando");
     } finally {
       setSyncing(false);
     }
-  }
+  }, [load, pushToast]);
 
   async function loadMoreFromDb() {
     if (!data) return;
@@ -78,43 +86,42 @@ export default function Home() {
       const r = await fetch(`/api/matches?${qs}`, { cache: "no-store" });
       const json = await r.json();
       if (!r.ok) throw new Error(json.error || "Error");
-      const incoming = (json.matches as Match[]).filter(
-        (m) => !all.some((x) => x.id === m.id && x.friend === m.friend),
-      );
+      const incoming = (json.matches as Match[]).filter((m) => !all.some((x) => x.id === m.id && x.friend === m.friend));
       setExtraMatches((prev) => [...prev, ...incoming]);
       setHasMoreDb(Boolean(json.hasMore) && incoming.length > 0);
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Error cargando más");
+      pushToast("error", e instanceof Error ? e.message : "Error cargando más");
     } finally {
       setLoadingMore(false);
     }
   }
 
+  // Initial load; if the DB is empty, do the first full sync automatically.
   useEffect(() => {
     (async () => {
       const dash = await load();
-      // Sin historial: primera carga completa de todas las partidas.
-      if (dash && (dash.matchTotal ?? 0) === 0) {
-        await sync();
-      }
+      if (dash && !dash.demo && (dash.matchTotal ?? 0) === 0) await sync();
     })();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [load, sync]);
 
-  const allMatches = useMemo(
-    () => [...(data?.recent || []), ...extraMatches],
-    [data, extraMatches],
-  );
+  // Keep live games + ranks fresh while the tab is visible.
+  useEffect(() => {
+    const id = setInterval(() => {
+      if (document.visibilityState === "visible" && !syncing) load(true);
+    }, LIVE_REFRESH_MS);
+    return () => clearInterval(id);
+  }, [load, syncing]);
 
-  const matches = useMemo(
-    () =>
-      allMatches.filter(
-        (m) =>
-          (filter === "Todos" || m.friend === filter) &&
-          (result === "Todos" || (result === "Victorias" ? m.win : !m.win)),
-      ),
-    [allMatches, filter, result],
-  );
+  const allMatches = useMemo(() => [...(data?.recent || []), ...extraMatches], [data, extraMatches]);
+
+  // Friends in ladder order (live first, then by rank).
+  const orderedFriends = useMemo(() => {
+    if (!data) return [];
+    const byKey = new Map(data.friends.map((f) => [`${f.name}#${f.tag}`, f]));
+    const ordered = data.ladder.map((l) => byKey.get(`${l.name}#${l.tag}`)).filter((f): f is NonNullable<typeof f> => Boolean(f));
+    const seen = new Set(ordered.map((f) => f.id));
+    return [...ordered, ...data.friends.filter((f) => !seen.has(f.id))];
+  }, [data]);
 
   const liveCount = data?.live?.length ?? 0;
   const matchTotal = data?.matchTotal ?? allMatches.length;
@@ -122,213 +129,180 @@ export default function Home() {
     .map((f) => f.syncedOldest)
     .filter((x): x is number => typeof x === "number")
     .sort((a, b) => a - b)[0];
+  const demoReason = data?.demo?.reason ?? null;
 
   return (
-    <main className="min-h-screen px-5 py-8 md:px-10 lg:px-16">
-      <div className="mx-auto max-w-7xl">
-        <header className="mb-8 flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
+    <>
+      <TopBar
+        syncing={syncing}
+        loading={loading}
+        onSync={sync}
+        onReload={() => load()}
+        updatedAt={updatedAt}
+        liveCount={liveCount}
+        demo={demoReason}
+      />
+
+      <main className="mx-auto max-w-[1400px] px-4 pb-16 pt-6 sm:px-6 lg:px-8">
+        {/* Hero */}
+        <div className="mb-6 flex flex-col gap-2 md:flex-row md:items-end md:justify-between">
           <div>
-            <p className="mb-2 text-sm font-bold uppercase tracking-[0.25em] text-cyan-400">League of Legends</p>
-            <h1 className="text-4xl font-black tracking-tight md:text-6xl">
-              Friends <span className="text-cyan-400">Tracker</span>
+            <p className="text-[11px] font-bold uppercase tracking-[0.3em] text-gold-400">League of Legends</p>
+            <h1 className="mt-1 font-display text-3xl font-bold tracking-tight sm:text-4xl">
+              El grupo, <span className="text-gradient-gold">en una sola pantalla</span>
             </h1>
-            <p className="mt-3 text-slate-400">Quién está en partida, el rango de cada uno y el historial guardado.</p>
+            <p className="mt-2 max-w-xl text-sm text-fg-muted">
+              Quién está en partida, el rango de cada uno y el historial guardado del grupo.
+            </p>
           </div>
-          <div className="flex flex-col items-start gap-2 md:items-end">
-            <div className="flex flex-wrap gap-2">
-              <button
-                onClick={() => sync()}
-                disabled={loading || syncing}
-                className="rounded-xl border border-slate-700 bg-slate-900 px-4 py-3 text-sm font-semibold hover:border-cyan-500 disabled:opacity-50"
-              >
-                {syncing ? "Sincronizando…" : "↻ Actualizar partidas"}
-              </button>
-              <button
-                onClick={load}
-                disabled={loading || syncing}
-                className="rounded-xl border border-slate-700 bg-slate-900 px-4 py-3 text-sm font-semibold hover:border-cyan-500 disabled:opacity-50"
-              >
-                {loading ? "Cargando…" : "Rangos / live"}
-              </button>
-            </div>
-            {updatedAt && <span className="text-xs text-slate-600">UI {timeAgo(updatedAt)}</span>}
-          </div>
-        </header>
+        </div>
 
-        <section className="mb-8">
-          <AddFriendForm
-            onAdded={async () => {
-              await load();
-              await sync();
-            }}
-          />
-        </section>
-
-        {error && (
-          <div className="mb-6 rounded-xl border border-red-900 bg-red-950/40 p-4 text-red-300">
-            {error}
-            {error.includes("RIOT_API_KEY") && (
-              <p className="mt-2 text-sm text-red-200/80">
-                Abrí <code>.env.local</code>, poné tu key de{" "}
-                <a className="underline" href="https://developer.riotgames.com" target="_blank" rel="noreferrer">
+        {demoReason && (
+          <div className="mb-6 flex flex-col gap-1 rounded-2xl border border-gold-500/30 bg-gold-500/[0.07] px-5 py-4 text-sm animate-fade-up sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <p className="font-semibold text-gold-300">Modo demo · estás viendo datos de ejemplo</p>
+              <p className="mt-0.5 text-fg-muted">
+                {demoReason}. Copiá <code className="rounded bg-ink-800 px-1.5 py-0.5 text-xs text-fg">.env.example</code> a{" "}
+                <code className="rounded bg-ink-800 px-1.5 py-0.5 text-xs text-fg">.env.local</code>, completá tu key de{" "}
+                <a className="underline decoration-gold-500/50 underline-offset-2 hover:text-gold-300" href="https://developer.riotgames.com" target="_blank" rel="noreferrer">
                   developer.riotgames.com
                 </a>{" "}
-                y reiniciá <code>pnpm dev</code>.
+                y levantá Postgres con <code className="rounded bg-ink-800 px-1.5 py-0.5 text-xs text-fg">docker compose up -d</code>.
               </p>
-            )}
-          </div>
-        )}
-        {syncMsg && (
-          <div className="mb-6 rounded-xl border border-cyan-900/50 bg-cyan-950/30 p-4 text-cyan-200">{syncMsg}</div>
-        )}
-        {loading && !data && (
-          <div className="rounded-2xl border border-slate-800 bg-slate-900/60 p-10 text-center text-slate-400">
-            Cargando amigos…
+            </div>
           </div>
         )}
 
-        {data && (
-          <>
-            <section className="mb-8 overflow-hidden rounded-2xl border border-slate-800 bg-slate-900/60">
-              <div className="border-b border-slate-800 px-5 py-4">
-                <h2 className="text-lg font-bold">Jugando ahora</h2>
-                <p className="text-sm text-slate-500">
-                  {liveCount
-                    ? `${liveCount} partida${liveCount === 1 ? "" : "s"} en curso · equipos, bans y hechizos`
-                    : "Nadie del grupo está en una partida ahora"}
-                </p>
-              </div>
-              {liveCount ? (
-                data.live.map((g) => <LiveGameCard key={g.gameId} game={g} />)
-              ) : (
-                <p className="px-5 py-8 text-center text-sm text-slate-600">
-                  Cuando alguien entre a una partida, aparece acá el lobby completo.
+        {error && (
+          <div className="mb-6 flex items-start gap-3 rounded-2xl border border-loss/30 bg-loss-deep/50 px-5 py-4 text-sm animate-fade-up">
+            <AlertTriangle size={18} className="mt-0.5 shrink-0 text-loss" />
+            <div>
+              <p className="font-semibold text-fg">{error}</p>
+              {error.includes("RIOT_API_KEY") && (
+                <p className="mt-1 text-fg-muted">
+                  Abrí <code>.env.local</code>, poné tu key de{" "}
+                  <a className="underline" href="https://developer.riotgames.com" target="_blank" rel="noreferrer">
+                    developer.riotgames.com
+                  </a>{" "}
+                  y reiniciá el servidor.
                 </p>
               )}
-            </section>
+            </div>
+          </div>
+        )}
 
-            <section className="mb-8 overflow-hidden rounded-2xl border border-slate-800 bg-slate-900/60">
-              <div className="border-b border-slate-800 px-5 py-4">
-                <h2 className="text-lg font-bold">Rangos</h2>
-                <p className="text-sm text-slate-500">Solo/Dúo y Flex de cada amigo. Los que están en partida van primero.</p>
-              </div>
-              <div className="divide-y divide-slate-800">
-                {data.ladder.map((x, i) => (
-                  <div
-                    key={`${x.name}#${x.tag}`}
-                    className="grid grid-cols-1 gap-3 px-5 py-4 sm:grid-cols-[32px_1fr_1fr_auto] sm:items-center sm:gap-4"
-                  >
-                    <span
-                      className={`text-lg font-black ${x.live ? "text-emerald-400" : i === 0 ? "text-amber-300" : "text-slate-500"}`}
-                    >
-                      {x.live ? "●" : `#${i + 1}`}
-                    </span>
-                    <div className="min-w-0">
-                      <p className="font-bold">
-                        {x.name}
-                        <span className="text-slate-500">#{x.tag}</span>
-                      </p>
-                      <p className="text-xs text-slate-500">
-                        {x.live
-                          ? "En partida"
-                          : x.lastMatchAt
-                            ? `Última partida ${timeAgo(x.lastMatchAt)}`
-                            : "Sin partidas recientes"}
-                      </p>
-                    </div>
-                    <div>
-                      <p className="mb-1 text-[11px] uppercase tracking-wider text-slate-500">Solo/Dúo</p>
-                      <RankBadge rank={x.solo} size={26} />
-                    </div>
-                    <div className="sm:text-right">
-                      <p className="mb-1 text-[11px] uppercase tracking-wider text-slate-500">Flex</p>
-                      <RankBadge rank={x.flex} size={26} align="right" />
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </section>
+        {loading && !data ? (
+          <LoadingSkeleton />
+        ) : data ? (
+          <div className="grid gap-6">
+            <StatsStrip friends={data.friends} liveCount={liveCount} matchTotal={matchTotal} recent={allMatches} oldestSync={oldestSync} />
 
-            <section className="mb-8">
-              <h2 className="mb-4 text-lg font-bold">Amigos</h2>
-              <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-                {data.friends.map((f) => (
-                  <PlayerCard key={f.id} friend={f} onRemoved={load} />
-                ))}
-              </div>
-            </section>
-
-            <section>
-              <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center">
-                <h2 className="mr-2 text-lg font-bold">Historial de partidas</h2>
-                <p className="text-sm text-slate-500">
-                  {matchTotal} guardadas
-                  {oldestSync ? ` · desde ${timeAgo(oldestSync)}` : ""}
-                </p>
-              </div>
-
-              <div className="mb-4 flex flex-wrap items-center gap-2">
-                <button
-                  onClick={() => setFilter("Todos")}
-                  className={`rounded-lg px-3 py-1.5 text-sm ${filter === "Todos" ? "bg-cyan-400 text-slate-950" : "bg-slate-900 text-slate-400"}`}
-                >
-                  Todos
-                </button>
-                {data.friends.map((f) => (
-                  <button
-                    key={f.id}
-                    onClick={() => setFilter(f.name)}
-                    className={`rounded-lg px-3 py-1.5 text-sm ${filter === f.name ? "bg-cyan-400 text-slate-950" : "bg-slate-900 text-slate-400"}`}
-                  >
-                    {f.name}
-                  </button>
-                ))}
-                <span className="mx-1 h-5 w-px bg-slate-800" />
-                {(["Todos", "Victorias", "Derrotas"] as ResultFilter[]).map((r) => (
-                  <button
-                    key={r}
-                    onClick={() => setResult(r)}
-                    className={`rounded-lg px-3 py-1.5 text-sm ${result === r ? "bg-slate-200 text-slate-950" : "bg-slate-900 text-slate-400"}`}
-                  >
-                    {r}
-                  </button>
-                ))}
-              </div>
-
-              <div className="grid gap-3">
-                {matches.length ? (
-                  matches.map((m) => (
-                    <MatchCard key={`${m.id}-${m.friend}`} m={m} onOpen={setSelectedMatch} />
-                  ))
-                ) : (
-                  <p className="rounded-2xl border border-slate-800 bg-slate-900/40 p-8 text-center text-slate-500">
-                    No hay partidas guardadas. Tocá <b>Actualizar partidas</b> para la carga inicial.
-                  </p>
-                )}
-              </div>
-
-              {(hasMoreDb || allMatches.length < matchTotal) && (
-                <div className="mt-4 flex justify-center">
-                  <button
-                    onClick={loadMoreFromDb}
-                    disabled={loadingMore}
-                    className="rounded-xl border border-slate-700 bg-slate-900 px-5 py-3 text-sm font-semibold hover:border-cyan-500 disabled:opacity-50"
-                  >
-                    {loadingMore ? "Cargando…" : "Mostrar más del historial"}
-                  </button>
+            {/* Live games — full width, only when someone is playing */}
+            {liveCount > 0 && (
+              <section className="grid gap-4 animate-fade-up">
+                <div className="flex flex-wrap items-baseline gap-x-3 gap-y-0.5">
+                  <h2 className="flex items-center gap-2 whitespace-nowrap font-display text-base font-semibold tracking-tight">
+                    <Radio size={16} className="text-live" />
+                    Jugando ahora
+                  </h2>
+                  <span className="text-sm text-fg-dim">
+                    {liveCount} partida{liveCount === 1 ? "" : "s"} en curso · equipos, bans y hechizos
+                  </span>
                 </div>
-              )}
-            </section>
-          </>
-        )}
+                {data.live.map((g) => (
+                  <LiveGameCard key={g.gameId} game={g} />
+                ))}
+              </section>
+            )}
 
-        <footer className="mt-12 border-t border-slate-900 pt-5 text-xs leading-5 text-slate-600">
-          LoL Friends Tracker no está respaldado por Riot Games. League of Legends y Riot Games son marcas de Riot
-          Games, Inc.
+            <div className="grid gap-6 lg:grid-cols-12">
+              {/* Sidebar: players + add + champions */}
+              <aside className="grid content-start gap-6 lg:col-span-5 xl:col-span-4">
+                <Card className="animate-fade-up">
+                  <CardHeader
+                    icon={<Trophy size={16} />}
+                    title="Jugadores"
+                    subtitle="Ordenados por rango. Los que están en partida van primero."
+                  />
+                  {orderedFriends.length ? (
+                    <div className="divide-y divide-white/[0.05]">
+                      {orderedFriends.map((f, i) => (
+                        <PlayerCard key={f.id} friend={f} position={i + 1} version={data.ddragonVersion} onRemoved={() => load()} canRemove={!demoReason} />
+                      ))}
+                    </div>
+                  ) : (
+                    <EmptyState title="Todavía no hay amigos" hint="Agregá el primero con su Riot ID." />
+                  )}
+                  <div className="border-t border-white/[0.06] bg-ink-950/30">
+                    <AddFriendForm
+                      disabled={Boolean(demoReason)}
+                      disabledHint="Configurá la API key y la base para agregar amigos reales."
+                      onAdded={async () => {
+                        await load();
+                        await sync();
+                      }}
+                    />
+                  </div>
+                </Card>
+
+                <div className="animate-fade-up">
+                  <ChampionPool friends={data.friends} version={data.ddragonVersion} />
+                </div>
+              </aside>
+
+              {/* Main: history */}
+              <div className="lg:col-span-7 xl:col-span-8 animate-fade-up">
+                <MatchHistory
+                  matches={allMatches}
+                  friends={orderedFriends}
+                  version={data.ddragonVersion}
+                  matchTotal={matchTotal}
+                  oldestSync={oldestSync}
+                  hasMore={hasMoreDb || allMatches.length < matchTotal}
+                  loadingMore={loadingMore}
+                  onLoadMore={loadMoreFromDb}
+                  onOpen={setSelectedMatch}
+                  demo={Boolean(demoReason)}
+                />
+              </div>
+            </div>
+          </div>
+        ) : null}
+
+        <footer className="mt-14 border-t border-white/[0.06] pt-5 text-xs leading-5 text-fg-dim">
+          LoL Friends Tracker no está respaldado por Riot Games. League of Legends y Riot Games son marcas de Riot Games, Inc.
         </footer>
-      </div>
+      </main>
 
-      {selectedMatch && <MatchDetailModal matchId={selectedMatch} onClose={() => setSelectedMatch(null)} />}
-    </main>
+      {selectedMatch && (
+        <MatchDetailModal
+          matchId={selectedMatch}
+          onClose={() => setSelectedMatch(null)}
+          friendNames={data?.friends.map((f) => f.name) ?? []}
+        />
+      )}
+      <Toasts items={toasts} onDismiss={(id) => setToasts((t) => t.filter((x) => x.id !== id))} />
+    </>
+  );
+}
+
+function LoadingSkeleton() {
+  return (
+    <div className="grid gap-6" aria-busy>
+      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+        {[0, 1, 2, 3].map((i) => (
+          <Skeleton key={i} className="h-[92px]" />
+        ))}
+      </div>
+      <div className="grid gap-6 lg:grid-cols-12">
+        <div className="grid gap-6 lg:col-span-5 xl:col-span-4">
+          <Skeleton className="h-[520px]" />
+          <Skeleton className="h-[260px]" />
+        </div>
+        <div className="lg:col-span-7 xl:col-span-8">
+          <Skeleton className="h-[820px]" />
+        </div>
+      </div>
+    </div>
   );
 }
